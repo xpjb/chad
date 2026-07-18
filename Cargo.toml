@@ -1,0 +1,29 @@
+[package]
+name = "chad"
+version = "0.1.0"
+edition = "2021"
+description = "Thin platform layer for games: owns the winit event loop, window, wgpu init, surface lifecycle, and frame timing; exposes winit and wgpu raw."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/xpjb/chad"
+readme = "README.md"
+keywords = ["gamedev", "wgpu", "winit", "graphics", "windowing"]
+categories = ["game-development", "graphics", "rendering"]
+
+[dependencies]
+winit = "0.30"
+wgpu = "30"
+log = "0.4"
+web-time = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+console_log = "1"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "Node", "CssStyleDeclaration"] }
+
+[dev-dependencies]
+log = "0.4"

@@ -1,7 +1,7 @@
 [package]
 name = "chad"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Thin platform layer for games: owns the winit event loop, window, wgpu init, surface lifecycle, and frame timing; exposes winit and wgpu raw."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xpjb/chad"
@@ -10,6 +10,7 @@ keywords = ["gamedev", "wgpu", "winit", "graphics", "windowing"]
 categories = ["game-development", "graphics", "rendering"]
 
 [dependencies]
+# Re-exported as chad::winit / chad::wgpu; their majors are chad's public API.
 winit = "0.30"
 wgpu = "30"
 log = "0.4"
@@ -27,3 +28,4 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 
 [dev-dependencies]
 log = "0.4"
+bytemuck = { version = "1", features = ["derive"] }

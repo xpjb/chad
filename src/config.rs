@@ -38,6 +38,10 @@ pub struct Config {
     pub vsync: bool,
     /// Exact present mode override for those who know what they want.
     pub present_mode: Option<wgpu::PresentMode>,
+    /// Desired maximum number of monitor refreshes between acquiring a surface
+    /// texture and presenting it. `1` prioritizes latency; higher values allow
+    /// more CPU/GPU overlap. Backends may clamp this hint to their supported range.
+    pub desired_maximum_frame_latency: u32,
     /// Sleep-based frame limiter. Dumb by design; mostly for vsync-off,
     /// menus, and battery.
     pub max_fps: Option<u32>,
@@ -70,6 +74,7 @@ impl Default for Config {
             icon: None,
             vsync: true,
             present_mode: None,
+            desired_maximum_frame_latency: 1,
             max_fps: None,
             timestep: Timestep::Variable,
             redraw: RedrawMode::Continuous,

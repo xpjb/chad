@@ -85,6 +85,7 @@ struct GpuOptions {
     features: wgpu::Features,
     limits: wgpu::Limits,
     present_mode: wgpu::PresentMode,
+    desired_maximum_frame_latency: u32,
 }
 
 fn gpu_options(cfg: &Config) -> GpuOptions {
@@ -93,6 +94,7 @@ fn gpu_options(cfg: &Config) -> GpuOptions {
         features: cfg.device_features,
         limits: cfg.device_limits.clone(),
         present_mode: cfg.initial_present_mode(),
+        desired_maximum_frame_latency: cfg.desired_maximum_frame_latency,
     }
 }
 
@@ -163,7 +165,12 @@ async fn build_ctx(
         .await
         .map_err(|e| format!("request_adapter: {e}"))?;
     let info = adapter.get_info();
-    log::info!("GPU: {} ({:?}, {:?})", info.name, info.device_type, info.backend);
+    log::info!(
+        "GPU: {} ({:?}, {:?})",
+        info.name,
+        info.device_type,
+        info.backend
+    );
 
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
@@ -200,7 +207,7 @@ async fn build_ctx(
         present_mode: opts.present_mode,
         alpha_mode: caps.alpha_modes[0],
         view_formats,
-        desired_maximum_frame_latency: 2,
+        desired_maximum_frame_latency: opts.desired_maximum_frame_latency,
         // Auto = wgpu's historical sRGB behavior; HDR output is opt-in and
         // out of scope for the runner (games can reconfigure if they care).
         color_space: wgpu::SurfaceColorSpace::Auto,
@@ -319,7 +326,10 @@ impl<G: ChadApp> Runner<G> {
                 state.ctx.alpha = 1.0;
                 state.game.update(&mut state.ctx);
             }
-            Timestep::Fixed { hz, max_updates_per_frame } => {
+            Timestep::Fixed {
+                hz,
+                max_updates_per_frame,
+            } => {
                 let step = 1.0 / hz.max(1) as f32;
                 state.accumulator =
                     (state.accumulator + real_dt).min(step * max_updates_per_frame.max(1) as f32);
@@ -344,7 +354,10 @@ impl<G: ChadApp> Runner<G> {
 
         if !state.minimized {
             if state.ctx.surface_dirty {
-                state.ctx.surface.configure(&state.ctx.device, &state.ctx.surface_config);
+                state
+                    .ctx
+                    .surface
+                    .configure(&state.ctx.device, &state.ctx.surface_config);
                 state.ctx.surface_dirty = false;
             }
             let acquired = match state.ctx.surface.get_current_texture() {
@@ -361,7 +374,9 @@ impl<G: ChadApp> Runner<G> {
                     None
                 }
                 // Hidden/covered or slow compositor: skip quietly, try again.
-                wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => None,
+                wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
+                    None
+                }
                 wgpu::CurrentSurfaceTexture::Validation => {
                     log::warn!("dropped frame: surface validation error");
                     None

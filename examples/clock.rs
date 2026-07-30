@@ -29,7 +29,11 @@ impl ChadApp for Clock {
             std::thread::sleep(std::time::Duration::from_secs(1));
             waker.wake();
         });
-        Ok(Self { pipeline, ubuf, bind })
+        Ok(Self {
+            pipeline,
+            ubuf,
+            bind,
+        })
     }
 
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
@@ -46,10 +50,11 @@ impl ChadApp for Clock {
         let sec_angle = (e % 60.0) / 60.0 * TAU;
         let min_angle = ((e / 60.0) % 60.0) / 60.0 * TAU;
         let (w, h) = ctx.size();
-        write_uniforms(ctx, &self.ubuf, &[
-            w as f32, h as f32, 0.0, 0.0,
-            sec_angle, min_angle, 0.0, 0.0,
-        ]);
+        write_uniforms(
+            ctx,
+            &self.ubuf,
+            &[w as f32, h as f32, 0.0, 0.0, sec_angle, min_angle, 0.0, 0.0],
+        );
         draw_fullscreen(ctx, view, &self.pipeline, &self.bind);
     }
 }
@@ -69,7 +74,11 @@ fn icon() -> AppIcon {
             }
         }
     }
-    AppIcon { rgba, width: w, height: h }
+    AppIcon {
+        rgba,
+        width: w,
+        height: h,
+    }
 }
 
 fn main() {
@@ -119,7 +128,10 @@ fn fullscreen_pipeline(
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: ubuf.as_entire_binding(),
+        }],
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -155,7 +167,12 @@ fn write_uniforms(ctx: &Ctx, buf: &wgpu::Buffer, data: &[f32]) {
     ctx.queue.write_buffer(buf, 0, &bytes);
 }
 
-fn draw_fullscreen(ctx: &Ctx, view: &wgpu::TextureView, pipeline: &wgpu::RenderPipeline, bind: &wgpu::BindGroup) {
+fn draw_fullscreen(
+    ctx: &Ctx,
+    view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind: &wgpu::BindGroup,
+) {
     let mut encoder = ctx
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

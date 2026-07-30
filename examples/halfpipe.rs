@@ -49,7 +49,9 @@ impl ChadApp for Halfpipe {
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
         match event {
             WindowEvent::CloseRequested => ctx.exit(),
-            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() && !event.repeat => {
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state.is_pressed() && !event.repeat =>
+            {
                 if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
                     self.interp = !self.interp;
                     ctx.window.set_title(&title(self.interp));
@@ -72,22 +74,38 @@ impl ChadApp for Halfpipe {
         let r = PIPE_R - 0.02 - BALL_R;
         let (s, c) = theta.sin_cos();
         let (w, h) = ctx.size();
-        write_uniforms(ctx, &self.ubuf, &[
-            w as f32, h as f32, 0.0, 0.0,
-            r * s, PIPE_CENTER_Y - r * c, BALL_R, 0.0,
-        ]);
+        write_uniforms(
+            ctx,
+            &self.ubuf,
+            &[
+                w as f32,
+                h as f32,
+                0.0,
+                0.0,
+                r * s,
+                PIPE_CENTER_Y - r * c,
+                BALL_R,
+                0.0,
+            ],
+        );
         draw_fullscreen(ctx, view, &self.pipeline, &self.bind);
     }
 }
 
 fn title(interp: bool) -> String {
-    format!("halfpipe — 20 Hz physics — interp {} (SPACE)", if interp { "ON" } else { "OFF" })
+    format!(
+        "halfpipe — 20 Hz physics — interp {} (SPACE)",
+        if interp { "ON" } else { "OFF" }
+    )
 }
 
 fn main() {
     let config = Config {
         title: title(true),
-        timestep: Timestep::Fixed { hz: 20, max_updates_per_frame: 5 },
+        timestep: Timestep::Fixed {
+            hz: 20,
+            max_updates_per_frame: 5,
+        },
         update_while_minimized: true,
         ..Default::default()
     };
@@ -130,7 +148,10 @@ fn fullscreen_pipeline(
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: ubuf.as_entire_binding(),
+        }],
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -166,7 +187,12 @@ fn write_uniforms(ctx: &Ctx, buf: &wgpu::Buffer, data: &[f32]) {
     ctx.queue.write_buffer(buf, 0, &bytes);
 }
 
-fn draw_fullscreen(ctx: &Ctx, view: &wgpu::TextureView, pipeline: &wgpu::RenderPipeline, bind: &wgpu::BindGroup) {
+fn draw_fullscreen(
+    ctx: &Ctx,
+    view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind: &wgpu::BindGroup,
+) {
     let mut encoder = ctx
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

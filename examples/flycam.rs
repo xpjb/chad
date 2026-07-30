@@ -110,13 +110,17 @@ impl ChadApp for Flycam {
         match event {
             WindowEvent::CloseRequested => ctx.exit(),
             WindowEvent::Resized(_) => self.remake_offscreen(ctx),
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
-                if state.is_pressed() && !self.grabbed =>
-            {
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if state.is_pressed() && !self.grabbed => {
                 self.set_grab(ctx, true);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                let PhysicalKey::Code(code) = event.physical_key else { return };
+                let PhysicalKey::Code(code) = event.physical_key else {
+                    return;
+                };
                 if event.state.is_pressed() {
                     self.keys.insert(code);
                     if !event.repeat {
@@ -158,14 +162,30 @@ impl ChadApp for Flycam {
             wish[1] += dir[1] * sign;
             wish[2] += dir[2] * sign;
         };
-        if self.keys.contains(&KeyCode::KeyW) { add(fwd, 1.0) }
-        if self.keys.contains(&KeyCode::KeyS) { add(fwd, -1.0) }
-        if self.keys.contains(&KeyCode::KeyD) { add(right, 1.0) }
-        if self.keys.contains(&KeyCode::KeyA) { add(right, -1.0) }
-        if self.keys.contains(&KeyCode::Space) { add([0.0, 1.0, 0.0], 1.0) }
-        if self.keys.contains(&KeyCode::ControlLeft) { add([0.0, 1.0, 0.0], -1.0) }
+        if self.keys.contains(&KeyCode::KeyW) {
+            add(fwd, 1.0)
+        }
+        if self.keys.contains(&KeyCode::KeyS) {
+            add(fwd, -1.0)
+        }
+        if self.keys.contains(&KeyCode::KeyD) {
+            add(right, 1.0)
+        }
+        if self.keys.contains(&KeyCode::KeyA) {
+            add(right, -1.0)
+        }
+        if self.keys.contains(&KeyCode::Space) {
+            add([0.0, 1.0, 0.0], 1.0)
+        }
+        if self.keys.contains(&KeyCode::ControlLeft) {
+            add([0.0, 1.0, 0.0], -1.0)
+        }
         let speed = BASE_SPEED
-            * if self.keys.contains(&KeyCode::ShiftLeft) { SPRINT_MULT } else { 1.0 };
+            * if self.keys.contains(&KeyCode::ShiftLeft) {
+                SPRINT_MULT
+            } else {
+                1.0
+            };
 
         // 1-pole low-pass on velocity: exponential approach to the wish
         // velocity, framerate-independent.
@@ -190,11 +210,24 @@ impl ChadApp for Flycam {
     }
 
     fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
-        write_uniforms(ctx, &self.ubuf, &[
-            self.low_size.0 as f32, self.low_size.1 as f32, ctx.elapsed, 0.0,
-            self.pos[0], self.pos[1], self.pos[2], 0.0,
-            self.yaw, self.pitch, 0.0, 0.0,
-        ]);
+        write_uniforms(
+            ctx,
+            &self.ubuf,
+            &[
+                self.low_size.0 as f32,
+                self.low_size.1 as f32,
+                ctx.elapsed,
+                0.0,
+                self.pos[0],
+                self.pos[1],
+                self.pos[2],
+                0.0,
+                self.yaw,
+                self.pitch,
+                0.0,
+                0.0,
+            ],
+        );
         let mut encoder = ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -277,9 +310,15 @@ fn map_cpu(p: [f32; 3]) -> f32 {
         z = z.clamp(-1.0, 1.0) * 2.0 - z;
         let r2 = x * x + y * y + z * z;
         if r2 < 0.25 {
-            x *= 4.0; y *= 4.0; z *= 4.0; dr *= 4.0;
+            x *= 4.0;
+            y *= 4.0;
+            z *= 4.0;
+            dr *= 4.0;
         } else if r2 < 1.0 {
-            x /= r2; y /= r2; z /= r2; dr /= r2;
+            x /= r2;
+            y /= r2;
+            z /= r2;
+            dr /= r2;
         }
         x = x * -1.75 + q[0];
         y = y * -1.75 + q[1];
@@ -352,7 +391,10 @@ fn fullscreen_pipeline(
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: ubuf.as_entire_binding(),
+        }],
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -389,7 +431,11 @@ fn make_offscreen(ctx: &Ctx) -> (wgpu::TextureView, (u32, u32)) {
     let lh = ((lw as f32 * h.max(1) as f32 / w.max(1) as f32).round() as u32).max(1);
     let tex = ctx.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("lowres"),
-        size: wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: lw,
+            height: lh,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -397,7 +443,10 @@ fn make_offscreen(ctx: &Ctx) -> (wgpu::TextureView, (u32, u32)) {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    (tex.create_view(&wgpu::TextureViewDescriptor::default()), (lw, lh))
+    (
+        tex.create_view(&wgpu::TextureViewDescriptor::default()),
+        (lw, lh),
+    )
 }
 
 fn make_blit_pipeline(ctx: &Ctx) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler) {
@@ -471,8 +520,14 @@ fn make_blit_bind(
         label: None,
         layout: bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
         ],
     })
 }

@@ -2,6 +2,8 @@
 
 A thin platform layer for games on **winit + wgpu**. Not an engine.
 
+> **Pins winit `0.30` + wgpu `30`**, re-exported as `chad::winit` / `chad::wgpu` — write against those, don't add your own. See [Versioning](#versioning).
+
 chad owns the part of every winit+wgpu project that is ugly, subtle, and
 identical across projects — the event loop, window creation, GPU init
 (including the async dance the browser forces), surface lifecycle, and frame
@@ -45,9 +47,28 @@ fn main() {
 | example | shows |
 |---|---|
 | `triangle` | the smallest complete app |
+| `sprite_batch` | the next step after `triangle`: generated texture, bind group, resize-aware screen uniform, dynamic instance buffer, and alpha-blended sprites in one draw |
 | `halfpipe` | `Timestep::Fixed` at 20 Hz, interpolation via `ctx.alpha()` (SPACE toggles it — see what it buys you), symplectic integration, `update_while_minimized` |
 | `flycam` | first-person crawl inside an endless repeated Mandelbox: capped internal resolution + upscale blit, CPU-mirrored SDF collision (no clipping), click-to-capture mouselook via `device_event`, 1-pole smoothed movement + Shift sprint, headlamp + orbit-trap glow, vsync toggle (V), fullscreen (F), `max_fps` |
 | `clock` | `RedrawMode::OnDemand` + `Waker`: renders once per second at ~zero idle CPU, procedural window icon |
+
+## Headless rendering
+
+On native targets, `Headless` creates a wgpu device without a window or
+surface. Use it for screenshot harnesses and render smoke checks:
+
+```rust
+let gpu = chad::Headless::new()?;
+let target = gpu.target((1280, 720));
+
+// Build pipelines with gpu.device, upload through gpu.queue, and render into
+// target.view with a normal wgpu render pass.
+
+let rgba = gpu.read_rgba8(&target)?;
+```
+
+The readback is tightly packed, top-to-bottom RGBA8. Image encoding remains
+consumer-owned.
 
 ## What you get
 
@@ -57,6 +78,7 @@ fn main() {
 - Surface lifecycle: resize, surface-lost recovery, minimize handling, sRGB
   view formats where the surface is non-sRGB (WebGPU), show-after-first-frame
   (no white flash)
+- Native headless wgpu initialization, RGBA8 render targets, and readback for screenshot harnesses
 - Frame timing: variable dt or a fix-your-timestep accumulator
   (`Timestep::Fixed`) with interpolation alpha and a death-spiral clamp; dt is
   clamped so debugger pauses don't launch your player through a wall
@@ -97,7 +119,8 @@ only the initial backing store on web. WebGPU only (no WebGL fallback).
 
 Because `winit` and `wgpu` are re-exported, their major versions are part of
 chad's public API: a release that bumps either is a breaking release of chad.
-Currently winit 0.30, wgpu 30.
+Currently winit 0.30, wgpu 30 (for winit, `0.30` *is* the major under pre-1.0
+semver). Reach them through `chad::winit` / `chad::wgpu`, never your own dep.
 
 ## License
 

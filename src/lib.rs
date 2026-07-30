@@ -2,6 +2,9 @@
 //! window, GPU init, surface lifecycle, and frame timing; the game implements
 //! [`ChadApp`] and sees only [`Ctx`] plus raw winit events and wgpu types.
 //!
+//! Pins **winit 0.30** and **wgpu 30**, re-exported as [`chad::winit`](winit)
+//! and [`chad::wgpu`](wgpu) — write your code against those, don't add your own.
+//!
 //! Scope rule: something belongs in this crate only if implementing it
 //! correctly requires touching the event loop, window, or surface lifecycle —
 //! or if it is identical in every game. Everything else is userland.
@@ -13,6 +16,10 @@ mod config;
 pub use config::*;
 mod ctx;
 pub use ctx::*;
+#[cfg(not(target_arch = "wasm32"))]
+mod headless;
+#[cfg(not(target_arch = "wasm32"))]
+pub use headless::*;
 mod runner;
 pub use runner::*;
 

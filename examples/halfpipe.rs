@@ -1,21 +1,15 @@
-//! Fix-your-timestep showcase: a ball rolling in a half-pipe with physics at
-//! a deliberately chunky 20 Hz, rendered at display rate.
-//!
-//! SPACE toggles interpolation. Off, you see the raw 20 Hz steps; on, the
-//! renderer blends the last two physics states with `ctx.alpha()` and 20 Hz
-//! looks smooth.
-//!
-//! A ball rolling without slipping in a circular pipe is a pendulum with the
-//! solid-sphere factor: theta'' = -(5/7)(g/R) sin(theta). Semi-implicit Euler
-//! is symplectic, so the oscillation's energy stays bounded forever — no
-//! damping fudge needed. `update_while_minimized` keeps the sim ticking while
-//! minimized; minimize it for a while and the ball is where it should be.
+//! Fixed-timestep interpolation demonstrated with deliberately chunky 20 Hz
+//! physics. Press Space to compare raw steps with `ctx.alpha()` smoothing.
+//! The simulation keeps running while the window is minimized.
 //!
 //! `cargo run --example halfpipe`
 
 use chad::winit::event::WindowEvent;
 use chad::winit::keyboard::{KeyCode, PhysicalKey};
-use chad::{wgpu, ChadApp, Config, Ctx, Timestep};
+use chad::{ChadApp, Config, Ctx, RenderContext, Timestep, wgpu};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod common;
 
 const G_OVER_R: f32 = 9.81; // g/R with R = 1 m
 const PIPE_CENTER_Y: f32 = 0.45;
@@ -31,11 +25,10 @@ struct Halfpipe {
     prev_theta: f32,
     interp: bool,
 }
-
-impl ChadApp for Halfpipe {
-    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+impl Halfpipe {
+    fn new(ctx: &impl RenderContext) -> Self {
         let (pipeline, ubuf, bind) = fullscreen_pipeline(ctx, WGSL, 32);
-        Ok(Self {
+        Self {
             pipeline,
             ubuf,
             bind,
@@ -43,32 +36,11 @@ impl ChadApp for Halfpipe {
             omega: 0.0,
             prev_theta: 1.15,
             interp: true,
-        })
-    }
-
-    fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => ctx.exit(),
-            WindowEvent::KeyboardInput { event, .. }
-                if event.state.is_pressed() && !event.repeat =>
-            {
-                if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
-                    self.interp = !self.interp;
-                    ctx.window.set_title(&title(self.interp));
-                }
-            }
-            _ => {}
         }
     }
 
-    fn update(&mut self, ctx: &mut Ctx) {
-        self.prev_theta = self.theta;
-        self.omega += -(5.0 / 7.0) * G_OVER_R * self.theta.sin() * ctx.dt;
-        self.theta += self.omega * ctx.dt;
-    }
-
-    fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
-        let a = if self.interp { ctx.alpha() } else { 1.0 };
+    fn render(&self, ctx: &impl RenderContext, view: &wgpu::TextureView, alpha: f32) {
+        let a = if self.interp { alpha } else { 1.0 };
         let theta = self.prev_theta + (self.theta - self.prev_theta) * a;
         // Ball center rolls on the pipe's inner surface.
         let r = PIPE_R - 0.02 - BALL_R;
@@ -92,11 +64,59 @@ impl ChadApp for Halfpipe {
     }
 }
 
+impl ChadApp for Halfpipe {
+    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+        Ok(Self::new(ctx))
+    }
+
+    fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => ctx.exit(),
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state.is_pressed() && !event.repeat =>
+            {
+                if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
+                    self.interp = !self.interp;
+                    ctx.window.set_title(&title(self.interp));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn update(&mut self, ctx: &mut Ctx) {
+        self.prev_theta = self.theta;
+        self.omega += -(5.0 / 7.0) * G_OVER_R * self.theta.sin() * ctx.dt();
+        self.theta += self.omega * ctx.dt();
+    }
+
+    fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
+        self.render(ctx, view, ctx.alpha());
+    }
+}
+
 fn title(interp: bool) -> String {
     format!(
         "halfpipe — 20 Hz physics — interp {} (SPACE)",
         if interp { "ON" } else { "OFF" }
     )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn screenshot(path: &std::path::Path) -> Result<(), String> {
+    const SIZE: (u32, u32) = (960, 540);
+    let config = Config {
+        size: SIZE,
+        init_logging: false,
+        ..Default::default()
+    };
+    let ctx = chad::HeadlessCtx::new(&config)?;
+    let mut halfpipe = Halfpipe::new(&ctx);
+    halfpipe.theta = 0.78;
+    halfpipe.prev_theta = 0.78;
+    halfpipe.render(&ctx, ctx.view(), 1.0);
+    let rgba = ctx.read_rgba8()?;
+    common::write_png(path, SIZE.0, SIZE.1, &rgba)
 }
 
 fn main() {
@@ -109,6 +129,10 @@ fn main() {
         update_while_minimized: true,
         ..Default::default()
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if common::run_screenshot(screenshot) {
+        return;
+    }
     if let Err(e) = chad::run::<Halfpipe>(config) {
         eprintln!("{e}");
     }
@@ -117,11 +141,11 @@ fn main() {
 // --- boilerplate shared by nothing (examples are self-contained) ---
 
 fn fullscreen_pipeline(
-    ctx: &Ctx,
+    ctx: &impl RenderContext,
     wgsl: &str,
     uniform_size: u64,
 ) -> (wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup) {
-    let device = &ctx.device;
+    let device = ctx.device();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(wgsl.into()),
@@ -170,7 +194,7 @@ fn fullscreen_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(ctx.surface_format.into())],
+            targets: &[Some(ctx.format().into())],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),
@@ -182,19 +206,19 @@ fn fullscreen_pipeline(
     (pipeline, ubuf, bind)
 }
 
-fn write_uniforms(ctx: &Ctx, buf: &wgpu::Buffer, data: &[f32]) {
+fn write_uniforms(ctx: &impl RenderContext, buf: &wgpu::Buffer, data: &[f32]) {
     let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_ne_bytes()).collect();
-    ctx.queue.write_buffer(buf, 0, &bytes);
+    ctx.queue().write_buffer(buf, 0, &bytes);
 }
 
 fn draw_fullscreen(
-    ctx: &Ctx,
+    ctx: &impl RenderContext,
     view: &wgpu::TextureView,
     pipeline: &wgpu::RenderPipeline,
     bind: &wgpu::BindGroup,
 ) {
     let mut encoder = ctx
-        .device
+        .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -217,7 +241,7 @@ fn draw_fullscreen(
         pass.set_bind_group(0, bind, &[]);
         pass.draw(0..3, 0..1);
     }
-    ctx.queue.submit(std::iter::once(encoder.finish()));
+    ctx.queue().submit(std::iter::once(encoder.finish()));
 }
 
 const WGSL: &str = r#"

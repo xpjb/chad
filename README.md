@@ -2,7 +2,7 @@
 
 A thin platform layer for games on **winit + wgpu**. Not an engine.
 
-> **Pins winit `0.30` + wgpu `30`**, re-exported as `chad::winit` / `chad::wgpu` — write against those, don't add your own. See [Versioning](#versioning).
+> **Re-exports winit `0.30` + wgpu `30`** as `chad::winit` / `chad::wgpu` — write against those, don't add your own. See [Versioning](#versioning).
 
 chad owns the part of every winit+wgpu project that is ugly, subtle, and
 identical across projects — the event loop, window creation, GPU init
@@ -42,33 +42,40 @@ fn main() {
 
 ## Examples
 
-`cargo run --example <name>` — each one is a single self-contained file:
+Run an example with `cargo run --example <name>`, or try the [Web gallery](https://xpjb.github.io/chad/):
 
-| example | shows |
-|---|---|
-| `triangle` | the smallest complete app |
-| `sprite_batch` | the next step after `triangle`: generated texture, bind group, resize-aware screen uniform, dynamic instance buffer, and alpha-blended sprites in one draw |
-| `halfpipe` | `Timestep::Fixed` at 20 Hz, interpolation via `ctx.alpha()` (SPACE toggles it — see what it buys you), symplectic integration, `update_while_minimized` |
-| `flycam` | first-person crawl inside an endless repeated Mandelbox: capped internal resolution + upscale blit, CPU-mirrored SDF collision (no clipping), click-to-capture mouselook via `device_event`, 1-pole smoothed movement + Shift sprint, headlamp + orbit-trap glow, vsync toggle (V), fullscreen (F), `max_fps` |
-| `clock` | `RedrawMode::OnDemand` + `Waker`: renders once per second at ~zero idle CPU, procedural window icon |
+| # | example | focus |
+|---:|---|---|
+| 1 | [`triangle`](examples/triangle.rs) | smallest complete app |
+| 2 | [`halfpipe`](examples/halfpipe.rs) | fixed 20 Hz updates and render interpolation; Space toggles smoothing |
+| 3 | [`clock`](examples/clock.rs) | on-demand redraw with `Waker`, plus a procedural window icon |
+| 4 | [`sprite_batch`](examples/sprite_batch.rs) | generated character texture, dynamic instances, alpha blending, one draw |
+| 5 | [`fractal_flight`](examples/fractal_flight.rs) | advanced Mandelbox raymarching showcase with flight controls and collision |
 
 ## Headless rendering
 
-On native targets, `Headless` creates a wgpu device without a window or
-surface. Use it for screenshot harnesses and render smoke checks:
+On native targets, `HeadlessCtx` owns a wgpu device and one RGBA8 sRGB
+offscreen target. Both `Ctx` and `HeadlessCtx` implement `RenderContext`, so
+window-independent setup and drawing can use the same renderer:
 
 ```rust
-let gpu = chad::Headless::new()?;
-let target = gpu.target((1280, 720));
+fn draw(ctx: &impl chad::RenderContext, view: &chad::wgpu::TextureView) {
+    // Build/encode/submit raw wgpu work through ctx.device() and ctx.queue().
+}
 
-// Build pipelines with gpu.device, upload through gpu.queue, and render into
-// target.view with a normal wgpu render pass.
-
-let rgba = gpu.read_rgba8(&target)?;
+let config = chad::Config {
+    size: (1280, 720),
+    ..Default::default()
+};
+let ctx = chad::HeadlessCtx::new(&config)?;
+draw(&ctx, ctx.view());
+let rgba = ctx.read_rgba8()?;
 ```
 
-The readback is tightly packed, top-to-bottom RGBA8. Image encoding remains
-consumer-owned.
+The readback is tightly packed, top-to-bottom RGBA8; image encoding remains
+consumer-owned. The examples add a local `--screenshot <path>` path using this
+same rendering code. Regenerate every committed gallery image with
+`scripts/update-gallery.ps1` on Windows or `scripts/update-gallery.sh` on Unix.
 
 ## What you get
 
@@ -78,7 +85,7 @@ consumer-owned.
 - Surface lifecycle: resize, surface-lost recovery, minimize handling, sRGB
   view formats where the surface is non-sRGB (WebGPU), show-after-first-frame
   (no white flash)
-- Native headless wgpu initialization, RGBA8 render targets, and readback for screenshot harnesses
+- A native `HeadlessCtx` implementing the same `RenderContext` as `Ctx`, with an owned offscreen target and RGBA8 readback
 - Frame timing: variable dt or a fix-your-timestep accumulator
   (`Timestep::Fixed`) with interpolation alpha and a death-spiral clamp; dt is
   clamped so debugger pauses don't launch your player through a wall
@@ -88,7 +95,8 @@ consumer-owned.
 - Continuous or on-demand redraw, optional sleep-based frame cap
 - A payloadless `Waker` to nudge the loop from other threads (drain your own
   channels in `update`)
-- Crash-log panic hook, logging init, window icon, fullscreen toggle
+- Logging and panic reporting are installed by default: native panics also
+  write `crash.log`; Web logs and panics go to the browser console
 - `Config` exposes `wgpu` device features and limits, so needing push
   constants doesn't mean forking the runner
 
@@ -102,18 +110,80 @@ know what a "game object" is, that's a bug.
 
 ## Web
 
-`winit` and `wgpu` are re-exported (`chad::winit`, `chad::wgpu`) — depend
-only on chad and versions can never drift. Build for the web with:
+Native and Web use the same `ChadApp`. Keep it in `src/lib.rs`, expose one
+shared `run`, and add the small browser entry point below.
 
-```sh
-cargo build --lib --target wasm32-unknown-unknown
-wasm-bindgen --target web --out-dir pkg target/wasm32-unknown-unknown/debug/your_crate.wasm
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 ```
 
-Your crate needs `crate-type = ["cdylib", "rlib"]` and a
-`#[wasm_bindgen(start)]` entry that calls the same `chad::run` as native.
-The canvas is appended to `<body>` and fills its parent; `Config.size` is
-only the initial backing store on web. WebGPU only (no WebGL fallback).
+```rust
+pub fn run() -> Result<(), String> {
+    chad::run::<Game>(Config::default())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn wasm_start() {
+    run().unwrap();
+}
+```
+
+The native `src/main.rs` can call the same function:
+
+```rust
+fn main() -> Result<(), String> {
+    your_crate::run()
+}
+```
+
+Install the target and `wasm-bindgen` CLI, then build the library and generate
+the browser module. The CLI version must match the `wasm-bindgen` version in
+`Cargo.lock`.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.126 --locked
+cargo build --lib --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/debug/your_crate.wasm
+```
+
+Use a minimal `web/index.html`:
+
+```html
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My game</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #fff; }
+  canvas { display: block; }
+</style>
+<body>
+  <script type="module">
+    import init from "./pkg/your_crate.js";
+    if (!navigator.gpu) {
+      document.body.textContent = "This game requires WebGPU.";
+    } else {
+      init().catch((error) => console.error(error));
+    }
+  </script>
+</body>
+```
+
+Serve it over HTTP—for example,
+`python -m http.server 8080 --directory web`—and open
+`http://localhost:8080`. chad appends its canvas to `<body>` and keeps it at
+the body's size; `Config.size` is only the initial backing size. WebGPU/game
+initialization continues asynchronously after the module loads. After the
+first frame is presented, chad dispatches a `chad-ready` event on `window`;
+loading screens can wait for it. Fatal startup errors and panics are reported
+to the browser console. WebGPU only; there is no WebGL fallback.
 
 ## Versioning
 

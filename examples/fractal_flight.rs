@@ -1,29 +1,21 @@
-//! First-person crawl through the endless interior of a repeated Mandelbox.
+//! Advanced showcase: fly through a repeated Mandelbox rendered by raymarching.
+//! Demonstrates raw mouse input, collision, offscreen rendering and upscaling,
+//! plus runtime vsync and fullscreen controls.
 //!
-//! Space is filled by tiling a scale -1.75 Mandelbox with a period (8) smaller
-//! than the structure itself, so the copies weld into one continuous alien
-//! hulk. You spawn inside the shell, where the veiny corridors live. There is
-//! no sun and no sky light — you carry a headlamp, and the structure's
-//! orbit-trap veins glow on their own.
+//! Controls: click to capture; WASD + Space/Ctrl move; Shift sprints; Esc
+//! releases the mouse; V toggles vsync; F toggles fullscreen.
 //!
-//! chad machinery on show:
-//! - raymarch at a capped internal resolution (<= 640 wide) into an offscreen
-//!   texture, then upscale-blit to the surface — fractal cost stops scaling
-//!   with window size
-//! - CPU-mirrored SDF for real collision: you cannot clip through the walls
-//! - click captures the mouse for mouselook; Esc releases it (close the
-//!   window with the X); raw deltas via `device_event`
-//! - 1-pole filtered movement, Shift to sprint, variable `ctx.dt`
-//! - V toggles vsync at runtime, F fullscreen, `max_fps` caps vsync-off
-//!
-//! `cargo run --example flycam`
+//! `cargo run --example fractal_flight`
 
 use std::collections::HashSet;
 
 use chad::winit::event::{DeviceEvent, MouseButton, WindowEvent};
 use chad::winit::keyboard::{KeyCode, PhysicalKey};
 use chad::winit::window::CursorGrabMode;
-use chad::{wgpu, ChadApp, Config, Ctx};
+use chad::{ChadApp, Config, Ctx, RenderContext, wgpu};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod common;
 
 /// World scale: the fractal is evaluated in its own unit space and blown up
 /// by this factor, so the player is ant-sized inside the corridor detail.
@@ -33,7 +25,7 @@ const BASE_SPEED: f32 = 15.0;
 const SPRINT_MULT: f32 = 4.0;
 const MAX_INTERNAL_WIDTH: u32 = 640;
 
-struct Flycam {
+struct FractalFlight {
     pipeline: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
@@ -54,35 +46,13 @@ struct Flycam {
     fps_frames: u32,
 }
 
-impl Flycam {
-    fn set_grab(&mut self, ctx: &Ctx, on: bool) {
-        if on {
-            let _ = ctx
-                .window
-                .set_cursor_grab(CursorGrabMode::Locked)
-                .or_else(|_| ctx.window.set_cursor_grab(CursorGrabMode::Confined));
-        } else {
-            let _ = ctx.window.set_cursor_grab(CursorGrabMode::None);
-        }
-        ctx.window.set_cursor_visible(!on);
-        self.grabbed = on;
-    }
-
-    fn remake_offscreen(&mut self, ctx: &Ctx) {
-        let (view, size) = make_offscreen(ctx);
-        self.blit_bind = make_blit_bind(ctx, &self.blit_bgl, &self.sampler, &view);
-        self.low_view = view;
-        self.low_size = size;
-    }
-}
-
-impl ChadApp for Flycam {
-    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+impl FractalFlight {
+    fn new(ctx: &impl RenderContext) -> Self {
         let (pipeline, ubuf, bind) = fullscreen_pipeline(ctx, WGSL, 48);
         let (blit_pipeline, blit_bgl, sampler) = make_blit_pipeline(ctx);
         let (low_view, low_size) = make_offscreen(ctx);
         let blit_bind = make_blit_bind(ctx, &blit_bgl, &sampler, &low_view);
-        Ok(Self {
+        Self {
             pipeline,
             ubuf,
             bind,
@@ -103,7 +73,101 @@ impl ChadApp for Flycam {
             vsync: true,
             fps_time: 0.0,
             fps_frames: 0,
-        })
+        }
+    }
+
+    fn set_grab(&mut self, ctx: &Ctx, on: bool) {
+        if on {
+            let _ = ctx
+                .window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| ctx.window.set_cursor_grab(CursorGrabMode::Confined));
+        } else {
+            let _ = ctx.window.set_cursor_grab(CursorGrabMode::None);
+        }
+        ctx.window.set_cursor_visible(!on);
+        self.grabbed = on;
+    }
+
+    fn remake_offscreen(&mut self, ctx: &impl RenderContext) {
+        let (view, size) = make_offscreen(ctx);
+        self.blit_bind = make_blit_bind(ctx, &self.blit_bgl, &self.sampler, &view);
+        self.low_view = view;
+        self.low_size = size;
+    }
+    fn render(&self, ctx: &impl RenderContext, view: &wgpu::TextureView, elapsed: f32) {
+        write_uniforms(
+            ctx,
+            &self.ubuf,
+            &[
+                self.low_size.0 as f32,
+                self.low_size.1 as f32,
+                elapsed,
+                0.0,
+                self.pos[0],
+                self.pos[1],
+                self.pos[2],
+                0.0,
+                self.yaw,
+                self.pitch,
+                0.0,
+                0.0,
+            ],
+        );
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        // Pass 1: raymarch at capped internal resolution.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("raymarch-lowres"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.low_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        // Pass 2: upscale to the output.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.blit_pipeline);
+            pass.set_bind_group(0, &self.blit_bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        ctx.queue().submit(std::iter::once(encoder.finish()));
+    }
+}
+
+impl ChadApp for FractalFlight {
+    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+        Ok(Self::new(ctx))
     }
 
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
@@ -189,19 +253,19 @@ impl ChadApp for Flycam {
 
         // 1-pole low-pass on velocity: exponential approach to the wish
         // velocity, framerate-independent.
-        let k = 1.0 - (-10.0 * ctx.dt).exp();
+        let k = 1.0 - (-10.0 * ctx.dt()).exp();
         for i in 0..3 {
             self.vel[i] += (wish[i] * speed - self.vel[i]) * k;
-            self.pos[i] += self.vel[i] * ctx.dt;
+            self.pos[i] += self.vel[i] * ctx.dt();
         }
         resolve_collision(&mut self.pos);
 
         self.fps_frames += 1;
-        self.fps_time += ctx.dt;
+        self.fps_time += ctx.dt();
         if self.fps_time >= 0.5 {
             let fps = self.fps_frames as f32 / self.fps_time;
             ctx.window.set_title(&format!(
-                "flycam — {fps:.0} fps — click to look, Esc frees mouse — WASD+Shift — V vsync {} — F fullscreen",
+                "fractal flight — {fps:.0} fps — V vsync {} — F fullscreen",
                 if self.vsync { "ON" } else { "OFF" }
             ));
             self.fps_time = 0.0;
@@ -210,88 +274,46 @@ impl ChadApp for Flycam {
     }
 
     fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
-        write_uniforms(
-            ctx,
-            &self.ubuf,
-            &[
-                self.low_size.0 as f32,
-                self.low_size.1 as f32,
-                ctx.elapsed,
-                0.0,
-                self.pos[0],
-                self.pos[1],
-                self.pos[2],
-                0.0,
-                self.yaw,
-                self.pitch,
-                0.0,
-                0.0,
-            ],
-        );
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        // Pass 1: raymarch at capped internal resolution.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("raymarch-lowres"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.low_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        // Pass 2: upscale to the window.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("blit"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.blit_pipeline);
-            pass.set_bind_group(0, &self.blit_bind, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.render(ctx, view, ctx.elapsed());
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn screenshot(path: &std::path::Path) -> Result<(), String> {
+    const SIZE: (u32, u32) = (1280, 720);
+    const ELAPSED: f32 = 4.0;
+    let config = Config {
+        size: SIZE,
+        init_logging: false,
+        ..Default::default()
+    };
+    let ctx = chad::HeadlessCtx::new(&config)?;
+    let mut flight = FractalFlight::new(&ctx);
+    flight.pos = [-2.0 * WORLD_SCALE, -1.6 * WORLD_SCALE, -1.44 * WORLD_SCALE];
+    flight.yaw = 0.35;
+    flight.pitch = -0.12;
+    flight.render(&ctx, ctx.view(), ELAPSED);
+    let rgba = ctx.read_rgba8()?;
+    common::write_png(path, SIZE.0, SIZE.1, &rgba)
 }
 
 fn main() {
     let config = Config {
-        title: "flycam — click to look, Esc frees mouse".into(),
+        title: "fractal flight — click to capture mouse".into(),
         max_fps: Some(240),
         ..Default::default()
     };
-    if let Err(e) = chad::run::<Flycam>(config) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if common::run_screenshot(screenshot) {
+        return;
+    }
+    if let Err(e) = chad::run::<FractalFlight>(config) {
         eprintln!("{e}");
     }
 }
 
 // --- CPU mirror of the shader's distance field, for collision ---
-// (Keep in sync with WGSL `map` below: same folds, same 0.7 safety factor.)
+// Keep in sync with WGSL `map` below.
 
 // Tile period 4.2 = the measured solid extent of the mandelbox (+/-2.1), so
 // the copies repeat flush: faces meet exactly, one continuous megastructure.
@@ -360,11 +382,11 @@ fn resolve_collision(pos: &mut [f32; 3]) {
 // --- boilerplate (examples are self-contained) ---
 
 fn fullscreen_pipeline(
-    ctx: &Ctx,
+    ctx: &impl RenderContext,
     wgsl: &str,
     uniform_size: u64,
 ) -> (wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup) {
-    let device = &ctx.device;
+    let device = ctx.device();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(wgsl.into()),
@@ -413,7 +435,7 @@ fn fullscreen_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(ctx.surface_format.into())],
+            targets: &[Some(ctx.format().into())],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),
@@ -425,11 +447,11 @@ fn fullscreen_pipeline(
     (pipeline, ubuf, bind)
 }
 
-fn make_offscreen(ctx: &Ctx) -> (wgpu::TextureView, (u32, u32)) {
+fn make_offscreen(ctx: &impl RenderContext) -> (wgpu::TextureView, (u32, u32)) {
     let (w, h) = ctx.size();
     let lw = MAX_INTERNAL_WIDTH.min(w.max(1));
     let lh = ((lw as f32 * h.max(1) as f32 / w.max(1) as f32).round() as u32).max(1);
-    let tex = ctx.device.create_texture(&wgpu::TextureDescriptor {
+    let tex = ctx.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("lowres"),
         size: wgpu::Extent3d {
             width: lw,
@@ -439,7 +461,7 @@ fn make_offscreen(ctx: &Ctx) -> (wgpu::TextureView, (u32, u32)) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: ctx.surface_format,
+        format: ctx.format(),
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
@@ -449,8 +471,10 @@ fn make_offscreen(ctx: &Ctx) -> (wgpu::TextureView, (u32, u32)) {
     )
 }
 
-fn make_blit_pipeline(ctx: &Ctx) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler) {
-    let device = &ctx.device;
+fn make_blit_pipeline(
+    ctx: &impl RenderContext,
+) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler) {
+    let device = ctx.device();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
@@ -498,7 +522,7 @@ fn make_blit_pipeline(ctx: &Ctx) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(ctx.surface_format.into())],
+            targets: &[Some(ctx.format().into())],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),
@@ -511,12 +535,12 @@ fn make_blit_pipeline(ctx: &Ctx) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout
 }
 
 fn make_blit_bind(
-    ctx: &Ctx,
+    ctx: &impl RenderContext,
     bgl: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
-    ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+    ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: bgl,
         entries: &[
@@ -532,9 +556,9 @@ fn make_blit_bind(
     })
 }
 
-fn write_uniforms(ctx: &Ctx, buf: &wgpu::Buffer, data: &[f32]) {
+fn write_uniforms(ctx: &impl RenderContext, buf: &wgpu::Buffer, data: &[f32]) {
     let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_ne_bytes()).collect();
-    ctx.queue.write_buffer(buf, 0, &bytes);
+    ctx.queue().write_buffer(buf, 0, &bytes);
 }
 
 const WGSL: &str = r#"

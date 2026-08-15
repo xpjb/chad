@@ -1,8 +1,11 @@
-//! The smallest complete chad app: clear + hard-coded triangle,
-//! fixed timestep, exit on close. `cargo run --example triangle`
+//! The smallest complete chad app: draw a triangle and exit on close.
+//! `cargo run --example triangle`
 
 use chad::winit::event::WindowEvent;
-use chad::{wgpu, ChadApp, Config, Ctx, Timestep};
+use chad::{ChadApp, Config, Ctx, RenderContext, wgpu};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod common;
 
 const CLEAR: wgpu::Color = wgpu::Color {
     r: 0.030,
@@ -15,23 +18,23 @@ struct Triangle {
     pipeline: wgpu::RenderPipeline,
 }
 
-impl ChadApp for Triangle {
-    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+impl Triangle {
+    fn new(ctx: &impl RenderContext) -> Self {
         let shader = ctx
-            .device
+            .device()
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("triangle-shader"),
                 source: wgpu::ShaderSource::Wgsl(TRIANGLE_WGSL.into()),
             });
         let layout = ctx
-            .device
+            .device()
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("triangle-layout"),
                 bind_group_layouts: &[],
                 immediate_size: 0,
             });
         let pipeline = ctx
-            .device
+            .device()
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("triangle-pipeline"),
                 layout: Some(&layout),
@@ -45,7 +48,7 @@ impl ChadApp for Triangle {
                     module: &shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: ctx.surface_format,
+                        format: ctx.format(),
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -57,20 +60,12 @@ impl ChadApp for Triangle {
                 multiview_mask: None,
                 cache: None,
             });
-        Ok(Self { pipeline })
+        Self { pipeline }
     }
 
-    fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
-        if let WindowEvent::CloseRequested = event {
-            ctx.exit();
-        }
-    }
-
-    fn update(&mut self, _ctx: &mut Ctx) {}
-
-    fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
+    fn render(&self, ctx: &impl RenderContext, view: &wgpu::TextureView) {
         let mut encoder = ctx
-            .device
+            .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
@@ -94,19 +89,52 @@ impl ChadApp for Triangle {
             pass.set_pipeline(&self.pipeline);
             pass.draw(0..3, 0..1);
         }
-        ctx.queue.submit(std::iter::once(encoder.finish()));
+        ctx.queue().submit(std::iter::once(encoder.finish()));
     }
+}
+
+impl ChadApp for Triangle {
+    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+        Ok(Self::new(ctx))
+    }
+
+    fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
+        if let WindowEvent::CloseRequested = event {
+            ctx.exit();
+        }
+    }
+
+    fn update(&mut self, _ctx: &mut Ctx) {}
+
+    fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
+        self.render(ctx, view);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn screenshot(path: &std::path::Path) -> Result<(), String> {
+    const SIZE: (u32, u32) = (960, 540);
+    let config = Config {
+        size: SIZE,
+        init_logging: false,
+        ..Default::default()
+    };
+    let ctx = chad::HeadlessCtx::new(&config)?;
+    let triangle = Triangle::new(&ctx);
+    triangle.render(&ctx, ctx.view());
+    let rgba = ctx.read_rgba8()?;
+    common::write_png(path, SIZE.0, SIZE.1, &rgba)
 }
 
 fn main() {
     let config = Config {
         title: "chad triangle".into(),
-        timestep: Timestep::Fixed {
-            hz: 60,
-            max_updates_per_frame: 8,
-        },
         ..Default::default()
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if common::run_screenshot(screenshot) {
+        return;
+    }
     if let Err(e) = chad::run::<Triangle>(config) {
         eprintln!("{e}");
     }

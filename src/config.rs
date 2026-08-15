@@ -56,9 +56,10 @@ pub struct Config {
     pub device_features: wgpu::Features,
     pub device_limits: wgpu::Limits,
 
-    /// Where the panic hook writes panic + backtrace. `None` = no hook.
+    /// Native crash-log path. `None` disables the native panic hook. Ignored
+    /// on Web, where a console panic hook is always installed.
     pub crash_log: Option<PathBuf>,
-    /// Install an env_logger backend (default filter "info", `RUST_LOG` overrides).
+    /// Install the default logger: `env_logger` on native, `console_log` on Web.
     pub init_logging: bool,
     /// Keep `update` ticking on a timer while minimized (multiplayer clients
     /// want true, single-player pause wants false).

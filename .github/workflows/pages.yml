@@ -1,0 +1,56 @@
+name: gallery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the locked wasm-bindgen CLI
+        run: |
+          version="$(python3 -c 'import tomllib; lock = tomllib.load(open("Cargo.lock", "rb")); print(next(package["version"] for package in lock["package"] if package["name"] == "wasm-bindgen"))')"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build browser examples
+        run: |
+          mkdir -p site
+          cp -R gallery/. site/
+          touch site/.nojekyll
+          for example in triangle halfpipe clock sprite_batch fractal_flight; do
+            cargo build --locked --release --target wasm32-unknown-unknown --example "$example"
+            mkdir -p "site/$example/pkg"
+            wasm-bindgen \
+              --target web \
+              --out-name app \
+              --out-dir "site/$example/pkg" \
+              "target/wasm32-unknown-unknown/release/examples/$example.wasm"
+          done
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy gallery
+        id: deployment
+        uses: actions/deploy-pages@v4

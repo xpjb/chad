@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Run the chad halfpipe WebGPU example in the browser.">
+  <title>Halfpipe — chad examples</title>
+  <link rel="stylesheet" href="../example.css">
+</head>
+<body data-state="loading">
+  <a class="back-link" href="../">Back to gallery</a>
+  <main class="status-overlay" id="status-overlay" role="status" aria-live="polite" aria-labelledby="status-title">
+    <section class="status-panel">
+      <span class="status-label" id="status-label">Loading</span>
+      <h1 class="status-title" id="status-title">Starting halfpipe</h1>
+      <p class="status-detail" id="status-detail">Preparing fixed-step physics and the WebGPU render pipeline.</p>
+      <p class="status-help"><a href="https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API#browser_compatibility">Check WebGPU browser support</a></p>
+    </section>
+  </main>
+  <script type="module">
+    import { launch } from "../example.js";
+    await launch(() => import("./pkg/app.js"));
+  </script>
+</body>
+</html>

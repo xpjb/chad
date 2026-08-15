@@ -16,7 +16,8 @@ use std::{cell::Cell, rc::Rc};
 ///
 /// On wasm this hands control to the browser and returns immediately; GPU init
 /// runs as a spawned future (the browser forbids blocking the main thread) and
-/// the game's `init` fires when it completes.
+/// the game's `init` fires when it completes. A `chad-ready` event is dispatched
+/// on `window` after the first frame is presented.
 pub fn run<G: ChadApp + 'static>(config: Config) -> Result<(), String> {
     init_logging_and_panic_hook(&config);
     let event_loop = EventLoop::new().map_err(|e| format!("event loop: {e}"))?;
@@ -391,6 +392,14 @@ impl<G: ChadApp> Runner<G> {
                 });
                 state.game.frame(&mut state.ctx, &view);
                 state.ctx.queue.present(frame);
+                #[cfg(target_arch = "wasm32")]
+                if state.ctx.frame_index == 0 {
+                    if let (Some(window), Ok(event)) =
+                        (web_sys::window(), web_sys::Event::new("chad-ready"))
+                    {
+                        let _ = window.dispatch_event(&event);
+                    }
+                }
                 state.ctx.frame_index += 1;
                 if !state.shown {
                     state.ctx.window.set_visible(true);

@@ -1,10 +1,13 @@
-//! A first real 2D pipeline: generated texture, bind group, resize-aware
-//! screen uniform, dynamic instance buffer, and alpha-blended sprite batch.
+//! A generated character texture rendered as a dynamic, alpha-blended
+//! sprite batch in one instanced draw.
 //! `cargo run --example sprite_batch`
 
 use bytemuck::{Pod, Zeroable};
 use chad::winit::event::WindowEvent;
-use chad::{wgpu, ChadApp, Config, Ctx};
+use chad::{ChadApp, Config, Ctx, RenderContext, wgpu};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod common;
 
 const SPRITE_COUNT: usize = 24;
 const TEXTURE_SIZE: u32 = 32;
@@ -31,28 +34,28 @@ struct SpriteBatch {
     instances: wgpu::Buffer,
 }
 
-impl ChadApp for SpriteBatch {
-    fn init(ctx: &mut Ctx) -> Result<Self, String> {
-        let shader = ctx
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("sprite-batch-shader"),
-                source: wgpu::ShaderSource::Wgsl(SPRITE_WGSL.into()),
-            });
-        let screen = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+impl SpriteBatch {
+    fn new(ctx: &impl RenderContext) -> Self {
+        let device = ctx.device();
+        let queue = ctx.queue();
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sprite-batch-shader"),
+            source: wgpu::ShaderSource::Wgsl(SPRITE_WGSL.into()),
+        });
+        let screen = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sprite-batch-screen"),
             size: 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let instances = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sprite-batch-instances"),
             size: (SPRITE_COUNT * std::mem::size_of::<Sprite>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprite-batch-texture"),
             size: wgpu::Extent3d {
                 width: TEXTURE_SIZE,
@@ -66,7 +69,7 @@ impl ChadApp for SpriteBatch {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        ctx.queue.write_texture(
+        queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
@@ -86,47 +89,45 @@ impl ChadApp for SpriteBatch {
             },
         );
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("sprite-batch-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
-        let bind_group_layout =
-            ctx.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("sprite-batch-bind-group-layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
-                });
-        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sprite-batch-bind-group-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sprite-batch-bind-group"),
             layout: &bind_group_layout,
             entries: &[
@@ -144,56 +145,52 @@ impl ChadApp for SpriteBatch {
                 },
             ],
         });
-        let pipeline_layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("sprite-batch-pipeline-layout"),
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
-        let pipeline = ctx
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("sprite-batch-pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Sprite>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![
-                            0 => Float32x2,
-                            1 => Float32x2,
-                            2 => Float32,
-                            3 => Float32x4
-                        ],
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: ctx.surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sprite-batch-pipeline-layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sprite-batch-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Sprite>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2,
+                        1 => Float32x2,
+                        2 => Float32,
+                        3 => Float32x4
+                    ],
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: ctx.format(),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
-        Ok(Self {
+        Self {
             pipeline,
             bind_group,
             screen,
             instances,
-        })
+        }
     }
 
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
@@ -204,17 +201,17 @@ impl ChadApp for SpriteBatch {
 
     fn update(&mut self, _ctx: &mut Ctx) {}
 
-    fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
+    fn render(&self, ctx: &impl RenderContext, view: &wgpu::TextureView, elapsed: f32) {
         let (width, height) = ctx.size();
         let screen = [width as f32, height as f32, 0.0, 0.0];
-        let sprites = make_sprites(ctx.elapsed, width as f32, height as f32);
-        ctx.queue
+        let sprites = make_sprites(elapsed, width as f32, height as f32);
+        ctx.queue()
             .write_buffer(&self.screen, 0, bytemuck::cast_slice(&screen));
-        ctx.queue
+        ctx.queue()
             .write_buffer(&self.instances, 0, bytemuck::cast_slice(&sprites));
 
         let mut encoder = ctx
-            .device
+            .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("sprite-batch-frame"),
             });
@@ -240,7 +237,24 @@ impl ChadApp for SpriteBatch {
             pass.set_vertex_buffer(0, self.instances.slice(..));
             pass.draw(0..6, 0..SPRITE_COUNT as u32);
         }
-        ctx.queue.submit(std::iter::once(encoder.finish()));
+        ctx.queue().submit(std::iter::once(encoder.finish()));
+    }
+}
+impl ChadApp for SpriteBatch {
+    fn init(ctx: &mut Ctx) -> Result<Self, String> {
+        Ok(Self::new(ctx))
+    }
+
+    fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
+        SpriteBatch::event(self, ctx, event);
+    }
+
+    fn update(&mut self, ctx: &mut Ctx) {
+        SpriteBatch::update(self, ctx);
+    }
+
+    fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
+        self.render(ctx, view, ctx.elapsed());
     }
 }
 
@@ -279,15 +293,46 @@ fn sprite_pixels() -> Vec<u8> {
     let mut pixels = vec![0; (TEXTURE_SIZE * TEXTURE_SIZE * 4) as usize];
     for y in 0..TEXTURE_SIZE {
         for x in 0..TEXTURE_SIZE {
-            let px = (x as f32 + 0.5) / TEXTURE_SIZE as f32 * 2.0 - 1.0;
-            let py = (y as f32 + 0.5) / TEXTURE_SIZE as f32 * 2.0 - 1.0;
-            let distance = (px * px + py * py).sqrt();
-            let alpha = ((1.0 - distance) * 8.0).clamp(0.0, 1.0);
+            let robot = (9..=22).contains(&x) && (5..=13).contains(&y)
+                || (8..=23).contains(&x) && (15..=24).contains(&y)
+                || (4..=7).contains(&x) && (16..=22).contains(&y)
+                || (24..=27).contains(&x) && (14..=20).contains(&y)
+                || (10..=14).contains(&x) && (25..=30).contains(&y)
+                || (18..=22).contains(&x) && (25..=30).contains(&y)
+                || (19..=20).contains(&x) && (2..=4).contains(&y);
+            let eyes = matches!((x, y), (12..=13, 8..=9) | (18..=19, 8..=9));
+            let chest = (13..=18).contains(&x) && (18..=20).contains(&y);
+            let antenna = (18..=21).contains(&x) && (0..=2).contains(&y);
+            let rgba = if eyes {
+                [25, 35, 55, 255]
+            } else if chest {
+                [75, 180, 255, 255]
+            } else if robot || antenna {
+                [255, 255, 255, 255]
+            } else {
+                [0, 0, 0, 0]
+            };
             let offset = ((y * TEXTURE_SIZE + x) * 4) as usize;
-            pixels[offset..offset + 4].copy_from_slice(&[255, 255, 255, (alpha * 255.0) as u8]);
+            pixels[offset..offset + 4].copy_from_slice(&rgba);
         }
     }
     pixels
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn screenshot(path: &std::path::Path) -> Result<(), String> {
+    const SIZE: (u32, u32) = (960, 540);
+    const ELAPSED: f32 = 3.25;
+    let config = Config {
+        size: SIZE,
+        init_logging: false,
+        ..Default::default()
+    };
+    let ctx = chad::HeadlessCtx::new(&config)?;
+    let sprites = SpriteBatch::new(&ctx);
+    sprites.render(&ctx, ctx.view(), ELAPSED);
+    let rgba = ctx.read_rgba8()?;
+    common::write_png(path, SIZE.0, SIZE.1, &rgba)
 }
 
 fn main() {
@@ -295,6 +340,10 @@ fn main() {
         title: "chad sprite batch".into(),
         ..Default::default()
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if common::run_screenshot(screenshot) {
+        return;
+    }
     if let Err(error) = chad::run::<SpriteBatch>(config) {
         eprintln!("{error}");
     }

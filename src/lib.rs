@@ -1,6 +1,8 @@
 //! Thin platform layer over winit + wgpu. The runner owns the event loop,
 //! window, GPU init, surface lifecycle, and frame timing; the game implements
-//! [`ChadApp`] and sees only [`Ctx`] plus raw winit events and wgpu types.
+//! [`ChadApp`] and sees [`Ctx`] plus raw winit events and wgpu types.
+//! Window-independent rendering can target [`RenderContext`]; native tools can
+//! render through an owning [`HeadlessCtx`] without a window or event loop.
 //!
 //! Pins **winit 0.30** and **wgpu 30**, re-exported as [`chad::winit`](winit)
 //! and [`chad::wgpu`](wgpu) — write your code against those, don't add your own.

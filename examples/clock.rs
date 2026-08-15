@@ -1,39 +1,105 @@
-//! The "applicationy" side of chad: `RedrawMode::OnDemand` + `Waker`.
-//!
-//! A stopwatch face that renders exactly once per second. Between renders the
-//! event loop sleeps in the OS — near-zero CPU and GPU. A background thread
-//! pings `Waker::wake()` once a second; the loop wakes, ticks, presents one
-//! frame, and goes back to sleep. Resizes and expose events still redraw
-//! immediately, because those flow through the loop as normal events.
-//!
-//! Also shows a procedural window icon (`Config.icon`) — check the taskbar.
+//! On-demand rendering with `Waker`: a native sleeping thread or browser
+//! interval wakes this stopwatch once per second while the event loop sleeps.
+//! Also demonstrates a procedural window icon.
 //!
 //! `cargo run --example clock`
 
 use chad::winit::event::WindowEvent;
-use chad::{wgpu, AppIcon, ChadApp, Config, Ctx, RedrawMode};
+use chad::{AppIcon, ChadApp, Config, Ctx, RedrawMode, RenderContext, wgpu};
+#[cfg(not(target_arch = "wasm32"))]
+mod common;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{JsCast, closure::Closure};
 
 struct Clock {
     pipeline: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
+    #[cfg(target_arch = "wasm32")]
+    _wake_interval: Option<WakeInterval>,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WakeInterval {
+    window: web_sys::Window,
+    id: i32,
+    _callback: Closure<dyn FnMut()>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WakeInterval {
+    fn new(waker: chad::Waker) -> Result<Self, String> {
+        let window = web_sys::window().ok_or_else(|| "browser window is unavailable".to_owned())?;
+        let callback = Closure::<dyn FnMut()>::new(move || waker.wake());
+        let id = window
+            .set_interval_with_callback_and_timeout_and_arguments_0(
+                callback.as_ref().unchecked_ref(),
+                1_000,
+            )
+            .map_err(|error| format!("failed to schedule clock interval: {error:?}"))?;
+        Ok(Self {
+            window,
+            id,
+            _callback: callback,
+        })
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for WakeInterval {
+    fn drop(&mut self) {
+        self.window.clear_interval_with_handle(self.id);
+    }
+}
+
+impl Clock {
+    fn new(ctx: &impl RenderContext) -> Self {
+        let (pipeline, ubuf, bind) = fullscreen_pipeline(ctx, WGSL, 32);
+        Self {
+            pipeline,
+            ubuf,
+            bind,
+            #[cfg(target_arch = "wasm32")]
+            _wake_interval: None,
+        }
+    }
+
+    fn render(&self, ctx: &impl RenderContext, view: &wgpu::TextureView, elapsed: f32) {
+        const TAU: f32 = std::f32::consts::TAU;
+        let sec_angle = (elapsed % 60.0) / 60.0 * TAU;
+        let min_angle = ((elapsed / 60.0) % 60.0) / 60.0 * TAU;
+        let (w, h) = ctx.size();
+        write_uniforms(
+            ctx,
+            &self.ubuf,
+            &[w as f32, h as f32, 0.0, 0.0, sec_angle, min_angle, 0.0, 0.0],
+        );
+        draw_fullscreen(ctx, view, &self.pipeline, &self.bind);
+    }
 }
 
 impl ChadApp for Clock {
     fn init(ctx: &mut Ctx) -> Result<Self, String> {
-        let (pipeline, ubuf, bind) = fullscreen_pipeline(ctx, WGSL, 32);
-        // The waker is Send + Clone; hand it to any thread. Payloadless by
-        // design: it only promises the loop will come around soon.
-        let waker = ctx.waker();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            waker.wake();
-        });
-        Ok(Self {
-            pipeline,
-            ubuf,
-            bind,
-        })
+        #[cfg(not(target_arch = "wasm32"))]
+        let clock = Self::new(ctx);
+        #[cfg(target_arch = "wasm32")]
+        let mut clock = Self::new(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // The waker is Send + Clone; native code can hand it to a sleeping thread.
+            let waker = ctx.waker();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    waker.wake();
+                }
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            clock._wake_interval = Some(WakeInterval::new(ctx.waker())?);
+        }
+        Ok(clock)
     }
 
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
@@ -45,17 +111,7 @@ impl ChadApp for Clock {
     fn update(&mut self, _ctx: &mut Ctx) {}
 
     fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView) {
-        const TAU: f32 = std::f32::consts::TAU;
-        let e = ctx.elapsed;
-        let sec_angle = (e % 60.0) / 60.0 * TAU;
-        let min_angle = ((e / 60.0) % 60.0) / 60.0 * TAU;
-        let (w, h) = ctx.size();
-        write_uniforms(
-            ctx,
-            &self.ubuf,
-            &[w as f32, h as f32, 0.0, 0.0, sec_angle, min_angle, 0.0, 0.0],
-        );
-        draw_fullscreen(ctx, view, &self.pipeline, &self.bind);
+        self.render(ctx, view, ctx.elapsed);
     }
 }
 
@@ -81,7 +137,25 @@ fn icon() -> AppIcon {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn screenshot(path: &std::path::Path) -> Result<(), String> {
+    const ELAPSED: f32 = 75.0;
+    let config = Config {
+        size: (480, 480),
+        ..Default::default()
+    };
+    let ctx = chad::HeadlessCtx::new(&config)?;
+    let clock = Clock::new(&ctx);
+    clock.render(&ctx, ctx.view(), ELAPSED);
+    let rgba = ctx.read_rgba8()?;
+    common::write_png(path, ctx.size().0, ctx.size().1, &rgba)
+}
+
 fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if common::run_screenshot(screenshot) {
+        return;
+    }
     let config = Config {
         title: "chad clock — redraws once per second".into(),
         size: (480, 480),
@@ -97,11 +171,11 @@ fn main() {
 // --- boilerplate (examples are self-contained) ---
 
 fn fullscreen_pipeline(
-    ctx: &Ctx,
+    ctx: &impl RenderContext,
     wgsl: &str,
     uniform_size: u64,
 ) -> (wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup) {
-    let device = &ctx.device;
+    let device = ctx.device();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(wgsl.into()),
@@ -150,7 +224,7 @@ fn fullscreen_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(ctx.surface_format.into())],
+            targets: &[Some(ctx.format().into())],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),
@@ -162,19 +236,19 @@ fn fullscreen_pipeline(
     (pipeline, ubuf, bind)
 }
 
-fn write_uniforms(ctx: &Ctx, buf: &wgpu::Buffer, data: &[f32]) {
+fn write_uniforms(ctx: &impl RenderContext, buf: &wgpu::Buffer, data: &[f32]) {
     let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_ne_bytes()).collect();
-    ctx.queue.write_buffer(buf, 0, &bytes);
+    ctx.queue().write_buffer(buf, 0, &bytes);
 }
 
 fn draw_fullscreen(
-    ctx: &Ctx,
+    ctx: &impl RenderContext,
     view: &wgpu::TextureView,
     pipeline: &wgpu::RenderPipeline,
     bind: &wgpu::BindGroup,
 ) {
     let mut encoder = ctx
-        .device
+        .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -197,7 +271,7 @@ fn draw_fullscreen(
         pass.set_bind_group(0, bind, &[]);
         pass.draw(0..3, 0..1);
     }
-    ctx.queue.submit(std::iter::once(encoder.finish()));
+    ctx.queue().submit(std::iter::once(encoder.finish()));
 }
 
 const WGSL: &str = r#"

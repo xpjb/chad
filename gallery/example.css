@@ -21,7 +21,6 @@
   --text-sm: 0.875rem;
   --leading-copy: 1.55;
   --transition-fast: 180ms cubic-bezier(0.22, 1, 0.36, 1);
-  --back-peek: var(--space-2);
 }
 
 * {
@@ -49,37 +48,6 @@ canvas {
   width: 100vw;
   height: 100vh;
   outline: none;
-}
-
-.back-link {
-  position: fixed;
-  top: var(--space-3);
-  left: 0;
-  z-index: 2;
-  padding: var(--space-2) var(--space-3);
-  border: 0.0625rem solid var(--color-line);
-  border-left: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--color-panel);
-  color: var(--color-ink);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-decoration: none;
-  transition: color var(--transition-fast), transform var(--transition-fast);
-}
-
-.back-link:hover {
-  color: var(--color-accent);
-}
-
-.back-link:focus-visible {
-  outline: 0.125rem solid var(--color-focus);
-  outline-offset: var(--space-1);
-}
-
-.is-ready .back-link:not(:hover):not(:focus-visible) {
-  transform: translateX(calc(-100% + var(--back-peek)));
 }
 
 .status-overlay {
@@ -187,10 +155,6 @@ canvas {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .back-link {
-    transition: none;
-  }
-
   [data-state="loading"] .status-label::after {
     animation: none;
   }

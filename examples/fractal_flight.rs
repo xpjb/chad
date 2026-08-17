@@ -2,8 +2,8 @@
 //! Demonstrates raw mouse input, collision, offscreen rendering and upscaling,
 //! plus runtime vsync and fullscreen controls.
 //!
-//! Controls: click to capture; WASD + Space/Ctrl move; Shift sprints; Esc
-//! releases the mouse; V toggles vsync; F toggles fullscreen.
+//! Controls: click to capture; WASD + Space/Ctrl move; Shift sprints; Esc or
+//! losing focus releases the mouse; V toggles vsync; F toggles fullscreen.
 //!
 //! `cargo run --example fractal_flight`
 
@@ -23,7 +23,8 @@ const WORLD_SCALE: f32 = 400.0;
 const PLAYER_RADIUS: f32 = 0.1;
 const BASE_SPEED: f32 = 15.0;
 const SPRINT_MULT: f32 = 4.0;
-const MAX_INTERNAL_WIDTH: u32 = 640;
+// Cap fragment work rather than one axis; this is 960x540 at 16:9.
+const MAX_INTERNAL_PIXELS: u64 = 960 * 540;
 
 struct FractalFlight {
     pipeline: wgpu::RenderPipeline,
@@ -173,6 +174,7 @@ impl ChadApp for FractalFlight {
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent) {
         match event {
             WindowEvent::CloseRequested => ctx.exit(),
+            WindowEvent::Focused(false) => self.set_grab(ctx, false),
             WindowEvent::Resized(_) => self.remake_offscreen(ctx),
             WindowEvent::MouseInput {
                 state,
@@ -446,11 +448,23 @@ fn fullscreen_pipeline(
     });
     (pipeline, ubuf, bind)
 }
+fn internal_size(size: (u32, u32)) -> (u32, u32) {
+    let w = size.0.max(1);
+    let h = size.1.max(1);
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels <= MAX_INTERNAL_PIXELS {
+        return (w, h);
+    }
+
+    let scale = (MAX_INTERNAL_PIXELS as f64 / pixels as f64).sqrt();
+    (
+        ((w as f64 * scale).floor() as u32).max(1),
+        ((h as f64 * scale).floor() as u32).max(1),
+    )
+}
 
 fn make_offscreen(ctx: &impl RenderContext) -> (wgpu::TextureView, (u32, u32)) {
-    let (w, h) = ctx.size();
-    let lw = MAX_INTERNAL_WIDTH.min(w.max(1));
-    let lh = ((lw as f32 * h.max(1) as f32 / w.max(1) as f32).round() as u32).max(1);
+    let (lw, lh) = internal_size(ctx.size());
     let tex = ctx.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("lowres"),
         size: wgpu::Extent3d {

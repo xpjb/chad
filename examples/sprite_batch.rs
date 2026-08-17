@@ -321,7 +321,7 @@ fn sprite_pixels() -> Vec<u8> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn screenshot(path: &std::path::Path) -> Result<(), String> {
-    const SIZE: (u32, u32) = (960, 540);
+    const SIZE: (u32, u32) = (854, 480);
     const ELAPSED: f32 = 3.25;
     let config = Config {
         size: SIZE,

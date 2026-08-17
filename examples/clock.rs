@@ -141,7 +141,7 @@ fn icon() -> AppIcon {
 fn screenshot(path: &std::path::Path) -> Result<(), String> {
     const ELAPSED: f32 = 75.0;
     let config = Config {
-        size: (480, 480),
+        size: (854, 480),
         ..Default::default()
     };
     let ctx = chad::HeadlessCtx::new(&config)?;

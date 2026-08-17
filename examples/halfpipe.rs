@@ -104,7 +104,7 @@ fn title(interp: bool) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn screenshot(path: &std::path::Path) -> Result<(), String> {
-    const SIZE: (u32, u32) = (960, 540);
+    const SIZE: (u32, u32) = (854, 480);
     let config = Config {
         size: SIZE,
         init_logging: false,

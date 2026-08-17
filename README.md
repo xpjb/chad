@@ -42,15 +42,15 @@ fn main() {
 
 ## Examples
 
-Run an example with `cargo run --example <name>`, or try the [Web gallery](https://xpjb.github.io/chad/):
+Run an example with `cargo run --example <name>`. Click a preview to run its Web build:
 
-| # | example | focus |
+| # | preview | example / focus |
 |---:|---|---|
-| 1 | [`triangle`](examples/triangle.rs) | smallest complete app |
-| 2 | [`halfpipe`](examples/halfpipe.rs) | fixed 20 Hz updates and render interpolation; Space toggles smoothing |
-| 3 | [`clock`](examples/clock.rs) | on-demand redraw with `Waker`, plus a procedural window icon |
-| 4 | [`sprite_batch`](examples/sprite_batch.rs) | generated character texture, dynamic instances, alpha blending, one draw |
-| 5 | [`fractal_flight`](examples/fractal_flight.rs) | advanced Mandelbox raymarching showcase with flight controls and collision |
+| 1 | [![Triangle](https://raw.githubusercontent.com/xpjb/chad/master/gallery/triangle.png)](https://xpjb.github.io/chad/triangle/) | [`triangle`](examples/triangle.rs) · [Web](https://xpjb.github.io/chad/triangle/)<br>Smallest complete app |
+| 2 | [![Halfpipe](https://raw.githubusercontent.com/xpjb/chad/master/gallery/halfpipe.png)](https://xpjb.github.io/chad/halfpipe/) | [`halfpipe`](examples/halfpipe.rs) · [Web](https://xpjb.github.io/chad/halfpipe/)<br>Fixed 20 Hz updates and render interpolation; Space toggles smoothing |
+| 3 | [![Clock](https://raw.githubusercontent.com/xpjb/chad/master/gallery/clock.png)](https://xpjb.github.io/chad/clock/) | [`clock`](examples/clock.rs) · [Web](https://xpjb.github.io/chad/clock/)<br>On-demand redraw with `Waker`, plus a procedural window icon |
+| 4 | [![Sprite batch](https://raw.githubusercontent.com/xpjb/chad/master/gallery/sprite_batch.png)](https://xpjb.github.io/chad/sprite_batch/) | [`sprite_batch`](examples/sprite_batch.rs) · [Web](https://xpjb.github.io/chad/sprite_batch/)<br>Generated character texture, dynamic instances, alpha blending, one draw |
+| 5 | [![Fractal flight](https://raw.githubusercontent.com/xpjb/chad/master/gallery/fractal_flight.png)](https://xpjb.github.io/chad/fractal_flight/) | [`fractal_flight`](examples/fractal_flight.rs) · [Web](https://xpjb.github.io/chad/fractal_flight/)<br>Advanced Mandelbox raymarching showcase with flight controls and collision |
 
 ## Headless rendering
 
@@ -74,7 +74,7 @@ let rgba = ctx.read_rgba8()?;
 
 The readback is tightly packed, top-to-bottom RGBA8; image encoding remains
 consumer-owned. The examples add a local `--screenshot <path>` path using this
-same rendering code. Regenerate every committed gallery image with
+same rendering code. Regenerate every committed example preview with
 `scripts/update-gallery.ps1` on Windows or `scripts/update-gallery.sh` on Unix.
 
 ## What you get

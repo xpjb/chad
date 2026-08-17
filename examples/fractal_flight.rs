@@ -280,7 +280,7 @@ impl ChadApp for FractalFlight {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn screenshot(path: &std::path::Path) -> Result<(), String> {
-    const SIZE: (u32, u32) = (1280, 720);
+    const SIZE: (u32, u32) = (854, 480);
     const ELAPSED: f32 = 4.0;
     let config = Config {
         size: SIZE,

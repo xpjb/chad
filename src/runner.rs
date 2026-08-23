@@ -11,6 +11,23 @@ use winit::window::Window;
 #[cfg(target_arch = "wasm32")]
 use std::{cell::Cell, rc::Rc};
 
+/// Hybrid sleep + spin-wait until `target` (from gnomes/engine).
+#[cfg(not(target_arch = "wasm32"))]
+fn sleep_until(target: Instant) {
+    let remaining = target.duration_since(Instant::now());
+    let sleep_overhead = Duration::from_micros(500);
+    let min_useful_sleep = Duration::from_micros(500);
+    let just_go = Duration::from_micros(100);
+
+    if remaining > sleep_overhead + min_useful_sleep {
+        std::thread::sleep(remaining - sleep_overhead);
+    }
+
+    while target.duration_since(Instant::now()) > just_go {
+        std::hint::spin_loop();
+    }
+}
+
 /// Run the app. Owns the event loop, window, GPU init, surface lifecycle, and
 /// frame loop; returns when the game calls `ctx.exit()` (or init fails).
 ///
@@ -408,14 +425,11 @@ impl<G: ChadApp> Runner<G> {
             }
         }
 
-        // Sleep-based limiter; browser (rAF) paces the web build instead.
+        // Hybrid sleep/spin limiter; browser (rAF) paces the web build instead.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(cap) = cfg.max_fps {
-            let target = Duration::from_secs_f32(1.0 / cap.max(1) as f32);
-            let spent = tick_start.elapsed();
-            if spent < target {
-                std::thread::sleep(target - spent);
-            }
+            let frame_time = Duration::from_secs_f32(1.0 / cap.max(1) as f32);
+            sleep_until(tick_start + frame_time);
         }
         if matches!(cfg.redraw, RedrawMode::Continuous) && !state.minimized {
             state.ctx.window.request_redraw();

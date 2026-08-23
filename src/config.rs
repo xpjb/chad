@@ -42,8 +42,7 @@ pub struct Config {
     /// texture and presenting it. `1` prioritizes latency; higher values allow
     /// more CPU/GPU overlap. Backends may clamp this hint to their supported range.
     pub desired_maximum_frame_latency: u32,
-    /// Sleep-based frame limiter. Dumb by design; mostly for vsync-off,
-    /// menus, and battery.
+    /// Hybrid sleep/spin frame limiter; mostly for vsync-off, menus, and battery.
     pub max_fps: Option<u32>,
     pub timestep: Timestep,
     pub redraw: RedrawMode,

@@ -92,7 +92,7 @@ same rendering code. Regenerate every committed example preview with
 - Vsync as a `Config` bool with a runtime toggle (`ctx.set_vsync`), or an
   exact `wgpu::PresentMode` if you know what you want
 - `DeviceEvent` forwarding (raw mouse deltas — what a mouselook camera needs)
-- Continuous or on-demand redraw, optional sleep-based frame cap
+- Continuous or on-demand redraw, optional hybrid sleep/spin frame cap
 - A payloadless `Waker` to nudge the loop from other threads (drain your own
   channels in `update`)
 - Logging and panic reporting are installed by default: native panics also

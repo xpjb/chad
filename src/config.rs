@@ -89,6 +89,7 @@ impl Default for Config {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 impl Config {
     pub(crate) fn initial_present_mode(&self) -> wgpu::PresentMode {
         self.present_mode.unwrap_or(if self.vsync {

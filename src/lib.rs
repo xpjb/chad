@@ -1,6 +1,7 @@
 //! Thin platform layer over winit + wgpu. The runner owns the event loop,
-//! window, GPU init, surface lifecycle, and frame timing; the game implements
-//! [`ChadApp`] and sees [`Ctx`] plus raw winit events and wgpu types.
+//! window, GPU init, surface lifecycle, and frame timing. Desktop/web games use
+//! `ChadApp` and `Ctx`; Android uses its separate `android::App` and `android::Ctx`.
+//! Both expose raw winit events and wgpu types.
 //! Window-independent rendering can target [`RenderContext`]; native tools can
 //! render through an owning [`HeadlessCtx`] without a window or event loop.
 //!
@@ -16,17 +17,27 @@ pub use winit;
 
 mod config;
 pub use config::*;
+mod render;
+pub use render::*;
+#[cfg(not(target_os = "android"))]
 mod ctx;
+#[cfg(not(target_os = "android"))]
 pub use ctx::*;
 #[cfg(not(target_arch = "wasm32"))]
 mod headless;
 #[cfg(not(target_arch = "wasm32"))]
 pub use headless::*;
+#[cfg(not(target_os = "android"))]
 mod runner;
+#[cfg(not(target_os = "android"))]
 pub use runner::*;
+#[cfg(target_os = "android")]
+pub mod android;
 
+#[cfg(not(target_os = "android"))]
 use winit::event::{DeviceEvent, WindowEvent};
 
+#[cfg(not(target_os = "android"))]
 pub trait ChadApp: Sized {
     /// Called once, on the main thread, after the window and GPU are ready.
     fn init(ctx: &mut Ctx) -> Result<Self, String>;

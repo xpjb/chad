@@ -77,6 +77,21 @@ consumer-owned. The examples add a local `--screenshot <path>` path using this
 same rendering code. Regenerate every committed example preview with
 `scripts/update-gallery.ps1` on Windows or `scripts/update-gallery.sh` on Unix.
 
+## Android
+
+Android uses the separate, Android-only `chad::android` module. Its `run`, `Ctx`, `Config`, and `App` types own NativeActivity startup, Vulkan presentation, and suspend/resume. Desktop/web `run`, `Ctx`, and `ChadApp` keep their existing contract. Rendering code can share `RenderContext` across all three execution paths.
+
+Implement `android::App` and call `android::run` from an exported `android_main(AndroidApp)` in an Android `cdylib`. Chad selects winit's `android-native-activity` feature only on Android. APK packaging stays with the application; no Java/Kotlin code is required for the NativeActivity path.
+
+- `init` runs once after the first GPU and surface are ready. `resumed` follows init and each surface resume.
+- `suspended` runs after the surface has been dropped. The game, device, and GPU resources stay alive within that runner.
+- Updates and frames run only while a drawing surface exists. The callbacks run on the `android_main` thread, not Java's UI thread.
+- `elapsed` is wall time, including suspension. `dt` is the real update interval, reset on resume and focus changes. The application chooses its game-clock, input cancellation, and save policy.
+- Presentation defaults to `AutoVsync` with a one-frame latency hint. This runner has no desktop sleep/spin frame limiter.
+- Process death still needs application-owned durable saves. GPU device loss and a changed surface format require restarting this first implementation.
+
+The Android module has passed ARM64 compile and Clippy checks. Device runtime acceptance is separate from those checks.
+
 ## What you get
 
 - Window + full wgpu init, blocking on native, async on wasm (browsers forbid
@@ -110,7 +125,7 @@ know what a "game object" is, that's a bug.
 
 ## Web
 
-Native and Web use the same `ChadApp`. Keep it in `src/lib.rs`, expose one
+Desktop and Web use the same `ChadApp`. Keep it in `src/lib.rs`, expose one
 shared `run`, and add the small browser entry point below.
 
 ```toml

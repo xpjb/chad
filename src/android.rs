@@ -21,6 +21,8 @@ pub struct Config {
     pub device_limits: wgpu::Limits,
     pub present_mode: wgpu::PresentMode,
     pub desired_maximum_frame_latency: u32,
+    /// Continuous for games; OnDemand redraws on input or window.request_redraw().
+    pub redraw: crate::RedrawMode,
 }
 
 impl Default for Config {
@@ -30,6 +32,7 @@ impl Default for Config {
             device_limits: wgpu::Limits::downlevel_defaults(),
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 1,
+            redraw: crate::RedrawMode::Continuous,
         }
     }
 }
@@ -65,14 +68,30 @@ impl Ctx {
 }
 
 impl RenderContext for Ctx {
-    fn device(&self) -> &wgpu::Device { &self.device }
-    fn queue(&self) -> &wgpu::Queue { &self.queue }
-    fn format(&self) -> wgpu::TextureFormat { self.surface_format }
-    fn size(&self) -> (u32, u32) { self.size }
-    fn dt(&self) -> f32 { self.dt }
-    fn elapsed(&self) -> f32 { self.elapsed }
-    fn frame_index(&self) -> u64 { self.frame_index }
-    fn alpha(&self) -> f32 { 1.0 }
+    fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+    fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+    fn format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+    fn size(&self) -> (u32, u32) {
+        self.size
+    }
+    fn dt(&self) -> f32 {
+        self.dt
+    }
+    fn elapsed(&self) -> f32 {
+        self.elapsed
+    }
+    fn frame_index(&self) -> u64 {
+        self.frame_index
+    }
+    fn alpha(&self) -> f32 {
+        1.0
+    }
 }
 
 /// Callbacks run on the NativeActivity `android_main` thread, not Java's UI thread.
@@ -94,13 +113,21 @@ pub trait App: Sized {
 pub fn run<G: App + 'static>(app: AndroidApp, config: Config) -> Result<(), String> {
     let _ = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    ).try_init();
+    )
+    .try_init();
     let event_loop = EventLoop::builder()
         .with_android_app(app.clone())
         .build()
         .map_err(|error| format!("Android event loop: {error}"))?;
-    let mut runner = Runner::<G> { app, config, state: None, error: None };
-    event_loop.run_app(&mut runner).map_err(|error| format!("Android event loop: {error}"))?;
+    let mut runner = Runner::<G> {
+        app,
+        config,
+        state: None,
+        error: None,
+    };
+    event_loop
+        .run_app(&mut runner)
+        .map_err(|error| format!("Android event loop: {error}"))?;
     match runner.error {
         Some(error) => Err(error),
         None => Ok(()),
@@ -127,7 +154,9 @@ struct State<G> {
 
 impl<G> State<G> {
     fn attach_surface(&mut self) -> Result<(), String> {
-        let surface = self.instance.create_surface(self.ctx.window.clone())
+        let surface = self
+            .instance
+            .create_surface(self.ctx.window.clone())
             .map_err(|error| format!("recreate Android surface: {error}"))?;
         let caps = surface.get_capabilities(&self.adapter);
         if !caps.formats.contains(&self.surface_config.format) {
@@ -143,7 +172,11 @@ impl<G> State<G> {
         self.ctx.dt = 0.0;
         self.ctx.elapsed = (self.last - self.start).as_secs_f32();
         self.ctx.focused = self.ctx.window.has_focus();
-        log::info!("Android surface ready: {}x{}", self.ctx.size.0, self.ctx.size.1);
+        log::info!(
+            "Android surface ready: {}x{}",
+            self.ctx.size.0,
+            self.ctx.size.1
+        );
         Ok(())
     }
 }
@@ -176,30 +209,47 @@ impl<G: App> ApplicationHandler for Runner<G> {
         }
 
         let result = pollster::block_on(async {
-            let window = Arc::new(event_loop.create_window(Window::default_attributes())
-                .map_err(|error| format!("Android window: {error}"))?);
-            let mut descriptor = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
+            let window = Arc::new(
+                event_loop
+                    .create_window(Window::default_attributes())
+                    .map_err(|error| format!("Android window: {error}"))?,
+            );
+            let mut descriptor = wgpu::InstanceDescriptor::new_with_display_handle_from_env(
+                Box::new(window.clone()),
+            );
             descriptor.backends = wgpu::Backends::VULKAN;
             let instance = wgpu::Instance::new(descriptor);
-            let surface = instance.create_surface(window.clone())
+            let surface = instance
+                .create_surface(window.clone())
                 .map_err(|error| format!("Android surface: {error}"))?;
-            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            }).await.map_err(|error| format!("Android Vulkan adapter: {error}"))?;
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                    apply_limit_buckets: false,
+                })
+                .await
+                .map_err(|error| format!("Android Vulkan adapter: {error}"))?;
             let info = adapter.get_info();
             log::info!("Android GPU: {} ({:?})", info.name, info.backend);
-            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("chad-android-device"),
-                required_features: self.config.device_features,
-                required_limits: self.config.device_limits.clone(),
-                ..Default::default()
-            }).await.map_err(|error| format!("Android GPU requirements: {error}"))?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("chad-android-device"),
+                    required_features: self.config.device_features,
+                    required_limits: self.config.device_limits.clone(),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|error| format!("Android GPU requirements: {error}"))?;
             let caps = surface.get_capabilities(&adapter);
-            let format = caps.formats.iter().copied().find(|format| format.is_srgb())
-                .or_else(|| caps.formats.first().copied()).ok_or("Android surface has no formats")?;
+            let format = caps
+                .formats
+                .iter()
+                .copied()
+                .find(|format| format.is_srgb())
+                .or_else(|| caps.formats.first().copied())
+                .ok_or("Android surface has no formats")?;
             let surface_format = format.add_srgb_suffix();
             let size = window.inner_size();
             let surface_config = wgpu::SurfaceConfiguration {
@@ -209,7 +259,11 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 height: size.height.max(1),
                 present_mode: self.config.present_mode,
                 alpha_mode: caps.alpha_modes[0],
-                view_formats: if surface_format == format { vec![] } else { vec![surface_format] },
+                view_formats: if surface_format == format {
+                    vec![]
+                } else {
+                    vec![surface_format]
+                },
                 desired_maximum_frame_latency: self.config.desired_maximum_frame_latency,
                 color_space: wgpu::SurfaceColorSpace::Auto,
             };
@@ -230,8 +284,14 @@ impl<G: App> ApplicationHandler for Runner<G> {
             let game = G::init(&mut ctx).map_err(|error| format!("Android game init: {error}"))?;
             let now = Instant::now();
             Ok::<_, String>(State {
-                game, ctx, instance, adapter, surface: Some(surface), surface_config,
-                start: now, last: now,
+                game,
+                ctx,
+                instance,
+                adapter,
+                surface: Some(surface),
+                surface_config,
+                start: now,
+                last: now,
             })
         });
         match result {
@@ -250,7 +310,9 @@ impl<G: App> ApplicationHandler for Runner<G> {
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(state) = &mut self.state {
-            let Some(surface) = state.surface.take() else { return };
+            let Some(surface) = state.surface.take() else {
+                return;
+            };
             drop(surface);
             state.ctx.elapsed = state.start.elapsed().as_secs_f32();
             state.ctx.dt = 0.0;
@@ -263,7 +325,12 @@ impl<G: App> ApplicationHandler for Runner<G> {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
         let Some(state) = &mut self.state else { return };
         state.ctx.elapsed = state.start.elapsed().as_secs_f32();
         match &event {
@@ -282,7 +349,9 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let Some(surface) = &state.surface else { return };
+                let Some(surface) = &state.surface else {
+                    return;
+                };
                 let size = state.ctx.window.inner_size();
                 if size.width == 0 || size.height == 0 {
                     return;
@@ -314,12 +383,14 @@ impl<G: App> ApplicationHandler for Runner<G> {
                         }
                         None
                     }
-                    wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => None,
+                    wgpu::CurrentSurfaceTexture::Occluded
+                    | wgpu::CurrentSurfaceTexture::Timeout => None,
                     wgpu::CurrentSurfaceTexture::Validation => {
                         self.fail(event_loop, "Android surface validation failed".into());
                         return;
                     }
                 };
+                let frame_retry = frame.is_none();
                 if let Some(frame) = frame {
                     let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                         format: Some(state.ctx.surface_format),
@@ -332,7 +403,8 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 }
                 if state.ctx.exit {
                     event_loop.exit();
-                } else {
+                } else if matches!(self.config.redraw, crate::RedrawMode::Continuous) || frame_retry
+                {
                     state.ctx.window.request_redraw();
                 }
                 return;
@@ -342,14 +414,23 @@ impl<G: App> ApplicationHandler for Runner<G> {
         state.game.event(&mut state.ctx, &event);
         if state.ctx.exit {
             event_loop.exit();
+        } else if state.surface.is_some() {
+            state.ctx.window.request_redraw();
         }
     }
 
-    fn device_event(&mut self, event_loop: &ActiveEventLoop, _id: winit::event::DeviceId, event: DeviceEvent) {
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
         if let Some(state) = &mut self.state {
             state.game.device_event(&mut state.ctx, &event);
             if state.ctx.exit {
                 event_loop.exit();
+            } else if state.surface.is_some() {
+                state.ctx.window.request_redraw();
             }
         }
     }

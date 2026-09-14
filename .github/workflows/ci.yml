@@ -30,3 +30,17 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo check --locked --target wasm32-unknown-unknown --examples
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - run: cargo check --locked --lib --target aarch64-linux-android
+      - run: cargo clippy --locked --lib --target aarch64-linux-android -- -D warnings
+      - run: cargo doc --locked --lib --no-deps --target aarch64-linux-android
+        env:
+          RUSTDOCFLAGS: -D warnings

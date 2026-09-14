@@ -1,6 +1,8 @@
 # chad
 
-A thin platform layer for games on **winit + wgpu**. Not an engine.
+A thin platform layer for games and apps on **winit + wgpu**. Not an engine.
+
+**Desktop · WebGPU · Android (NativeActivity + Vulkan)**
 
 > **Re-exports winit `0.30` + wgpu `30`** as `chad::winit` / `chad::wgpu` — write against those, don't add your own. See [Versioning](#versioning).
 
@@ -87,10 +89,12 @@ Implement `android::App` and call `android::run` from an exported `android_main(
 - `suspended` runs after the surface has been dropped. The game, device, and GPU resources stay alive within that runner.
 - Updates and frames run only while a drawing surface exists. The callbacks run on the `android_main` thread, not Java's UI thread.
 - `elapsed` is wall time, including suspension. `dt` is the real update interval, reset on resume and focus changes. The application chooses its game-clock, input cancellation, and save policy.
-- Presentation defaults to `AutoVsync` with a one-frame latency hint. This runner has no desktop sleep/spin frame limiter.
+- Presentation defaults to `AutoVsync` with a one-frame latency hint. This runner has no desktop sleep/spin frame limiter. `Config.redraw` defaults to `RedrawMode::Continuous`; tools can use `OnDemand` to redraw only on window/device events or `ctx.window.request_redraw()` (also callable from another thread). Surface acquisition failures are retried.
 - Process death still needs application-owned durable saves. GPU device loss and a changed surface format require restarting this first implementation.
 
-The Android module has passed ARM64 compile and Clippy checks. Device runtime acceptance is separate from those checks.
+The Android runner is now on **master**, after use in Android app/game builds and user-reported phone testing. It is no longer necessary to depend on the `android-runner` branch. Driver compatibility still depends on the device; the current runner requires Vulkan.
+
+Chad is a library, not an installable app. For packaging examples, see the [flow / 100 Android test app](https://github.com/xpjb/flow100/tree/android-app/android) and its build instructions (ARM64, Android 10+, development-signed APK). Building or sideloading a demo is entirely optional; desktop and Web consumers need no Android tooling.
 
 ## What you get
 

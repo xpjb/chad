@@ -20,4 +20,3 @@ pub trait RenderContext {
     /// Fixed-step interpolation factor.
     fn alpha(&self) -> f32;
 }
-

@@ -91,11 +91,61 @@ Implement `android::App` and call `android::run` from an exported `android_main(
 - `elapsed` is wall time, including suspension. `dt` is the real update interval, reset on resume and focus changes. The application chooses its game-clock, input cancellation, and save policy.
 - Presentation defaults to `AutoVsync` with a one-frame latency hint. This runner has no desktop sleep/spin frame limiter. `Config.redraw` defaults to `RedrawMode::Continuous`; tools can use `OnDemand` to redraw only on window/device events or `ctx.window.request_redraw()` (also callable from another thread). Surface acquisition failures are retried.
 - Process death still needs application-owned durable saves. GPU device loss and a changed surface format require restarting this first implementation.
-- **Activity teardown is not process teardown.** winit 0.30 permits only one event loop per process. Calling `ctx.exit()` finishes the NativeActivity, but a later launch in the same still-alive process cannot create another loop. Apps should background the task for root Back (for example, `Activity.moveTaskToBack(true)`). Single-activity apps with no other process-owned work can terminate their process after `android::run` returns so a later launch starts fresh; mixed Java/native applications need their own process/lifecycle policy.
+- **Activity teardown is not process teardown.** Android can destroy and recreate an Activity without ending its process. See [upstream winit issues we're tracking](#upstream-winit-issues-were-tracking) before choosing an exit policy.
 
 The Android runner is now on **master**, after use in Android app/game builds and user-reported phone testing. It is no longer necessary to depend on the `android-runner` branch. Driver compatibility still depends on the device; the current runner requires Vulkan.
 
 Chad is a library, not an installable app. For packaging examples, see the [flow / 100 Android test app](https://github.com/xpjb/flow100/tree/android-app/android) and its build instructions (ARM64, Android 10+, development-signed APK). Building or sideloading a demo is entirely optional; desktop and Web consumers need no Android tooling.
+
+### Upstream winit issues we're tracking
+
+Last checked **2026-09-14** against **0.30.13**, **0.31.0-beta.3**, and upstream
+master ([`475f5e2`](https://github.com/rust-windowing/winit/tree/475f5e236366bd2ea5697eea25d3f6c4fc16ad28)).
+The Back mapping remains unchanged and both lifecycle problems remain unfixed;
+upgrading to that beta/master is not a solution. These are not fixed by Chad's
+Android merge.
+
+1. **Android Back naming/documentation mismatch.** The 0.30 documentation labels
+   `NamedKey::GoBack` as Android `KEYCODE_BACK`, but the backend actually emits
+   `NamedKey::BrowserBack`. Following the documentation alone can therefore leave
+   an app's Back handler doing nothing. Related upstream issue:
+   [#2304 — Support Back button/KeyCode on Android](https://github.com/rust-windowing/winit/issues/2304).
+   That older, broader issue also discusses returning unhandled Back events to
+   Android; it is not a dedicated report of this exact naming mismatch.
+   **For now:** apps should recognize `BrowserBack | GoBack` (and Escape if
+   appropriate). Chad preserves raw events; the app decides what Back does.
+   **Waiting for:** clarification of the intended mapping and matching docs,
+   rather than silently changing an established mapping and breaking consumers.
+
+2. **Activity Destroy does not exit the event loop.** winit's Android backend
+   ignores `MainEvent::Destroy` instead of ending the loop. `android_main()` can
+   consequently fail to return, leaving native Activity teardown stuck. Ordinary
+   surface suspension/resumption is a different path and does not fix this.
+   Upstream: [#4303 — Destroy does not exit the event loop](https://github.com/rust-windowing/winit/issues/4303).
+   **Needed:** backend handling that ends the loop and permits cleanup/return
+   when the Activity is actually destroyed, not on every background/suspend.
+
+3. **A replacement Activity cannot create a new event loop in the same process.**
+   After an earlier loop exits, Android may call `android_main()` again with a
+   new Activity/`AndroidApp`, but winit's process-wide guard rejects the new loop
+   with `RecreationAttempt` ("EventLoop can't be recreated"). Fixing Destroy alone
+   exposes this second problem. Upstream:
+   [#3325 — RecreationAttempt on Activity reopen](https://github.com/rust-windowing/winit/issues/3325).
+   **Needed:** safe sequential loop recreation after the previous loop has fully
+   torn down. This is not a request to allow arbitrary concurrent loops/Activities.
+
+There is an [unmerged candidate patch for both lifecycle issues](https://github.com/rib/winit/commit/c28e425214e82bdb86dcdf89c9488554a18e24b2),
+linked from #4303. **Chad does not currently include that patch.** Any fix carried
+through Chad's Android dependency integration needs regression checks for
+background/resume, actual Activity destruction, and subsequent creation in the
+same process; it should not become bespoke teardown code in every app.
+
+For ordinary root-screen Back, an app can background its task (for example,
+`Activity.moveTaskToBack(true)`) and keep the existing loop resumable. This avoids
+that exit path; **it does not solve actual Activity destruction/recreation**.
+Process termination is not Chad's generic lifecycle policy. In particular, an
+app-owned process-exit workaround after `android::run` returns cannot fix an
+ignored Destroy event that prevents the runner from returning in the first place.
 
 ## What you get
 

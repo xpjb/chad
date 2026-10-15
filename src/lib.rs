@@ -34,6 +34,23 @@ pub use runner::*;
 #[cfg(target_os = "android")]
 pub mod android;
 
+fn platform_instance_descriptor(
+    descriptor: wgpu::InstanceDescriptor,
+) -> wgpu::InstanceDescriptor {
+    #[cfg(target_os = "windows")]
+    {
+        let mut descriptor = descriptor;
+        if wgpu::Backends::from_env().is_none() {
+            descriptor.backends = wgpu::Backends::DX12;
+        }
+        descriptor
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        descriptor
+    }
+}
+
 #[cfg(not(target_os = "android"))]
 use winit::event::{DeviceEvent, WindowEvent};
 

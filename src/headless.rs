@@ -32,8 +32,10 @@ impl HeadlessCtx {
     }
 
     async fn request(config: &Config) -> Result<Self, String> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let descriptor = crate::platform_instance_descriptor(
+            wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+        );
+        let instance = wgpu::Instance::new(descriptor);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: config.power_preference,

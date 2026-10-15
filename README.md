@@ -13,6 +13,10 @@ timing — and hands you raw `winit` events and raw `wgpu` types. No wrappers,
 no ECS, no scenes, no assets. You implement one trait; everything else is
 your code.
 
+Windows desktop and headless contexts default to DX12. Set `WGPU_BACKEND` to
+explicitly select another backend. Android remains Vulkan-only, and Web is
+unchanged.
+
 ```rust
 use chad::{wgpu, ChadApp, Config, Ctx};
 use chad::winit::event::WindowEvent;

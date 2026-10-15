@@ -167,9 +167,10 @@ async fn build_ctx(
 ) -> Result<Ctx, String> {
     // _from_env: WGPU_BACKEND etc. can override without a rebuild. The display
     // handle is needed for presentability on GLES/Wayland; harmless elsewhere.
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(
-        Box::new(window.clone()),
-    ));
+    let descriptor = crate::platform_instance_descriptor(
+        wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
+    );
+    let instance = wgpu::Instance::new(descriptor);
     let surface = instance
         .create_surface(window.clone())
         .map_err(|e| format!("create_surface: {e}"))?;

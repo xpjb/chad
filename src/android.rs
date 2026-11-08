@@ -107,6 +107,14 @@ impl Ctx {
         self.mobile_viewport
     }
 
+    pub fn scale_factor(&self) -> f64 {
+        self.window.scale_factor()
+    }
+
+    pub fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+
     fn java(&self, method: ActivityMethod) -> Result<(), String> {
         let vm = unsafe { JavaVM::from_raw(self.app.vm_as_ptr().cast()) };
         vm.attach_current_thread(|env| {

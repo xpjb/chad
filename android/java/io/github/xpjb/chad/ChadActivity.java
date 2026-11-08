@@ -43,6 +43,18 @@ public class ChadActivity extends NativeActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        try {
+            android.content.pm.ActivityInfo info = getPackageManager().getActivityInfo(
+                getComponentName(), android.content.pm.PackageManager.GET_META_DATA);
+            String library = info.metaData == null ? null
+                : info.metaData.getString("android.app.lib_name");
+            if (library == null || library.isEmpty()) {
+                throw new IllegalStateException("android.app.lib_name is not configured");
+            }
+            System.loadLibrary(library);
+        } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+            throw new IllegalStateException("cannot read NativeActivity metadata", error);
+        }
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         getWindow().setDecorFitsSystemWindows(false);
         View decor = getWindow().getDecorView();

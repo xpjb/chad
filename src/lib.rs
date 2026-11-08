@@ -15,6 +15,9 @@
 pub use wgpu;
 pub use winit;
 
+mod mobile;
+pub use mobile::*;
+
 mod config;
 pub use config::*;
 mod render;

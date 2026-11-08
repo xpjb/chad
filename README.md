@@ -87,7 +87,9 @@ same rendering code. Regenerate every committed example preview with
 
 Android uses the separate, Android-only `chad::android` module. Its `run`, `Ctx`, `Config`, and `App` types own NativeActivity startup, Vulkan presentation, and suspend/resume. Desktop/web `run`, `Ctx`, and `ChadApp` keep their existing contract. Rendering code can share `RenderContext` across all three execution paths.
 
-Implement `android::App` and call `android::run` from an exported `android_main(AndroidApp)` in an Android `cdylib`. Chad selects winit's `android-native-activity` feature only on Android. APK packaging stays with the application; no Java/Kotlin code is required for the NativeActivity path.
+Implement `android::App` and call `android::run` from an exported `android_main(AndroidApp)` in an Android `cdylib`. Chad selects winit's `android-native-activity` feature only on Android. APK packaging stays with the application; the stock NativeActivity path requires no Java/Kotlin code.
+
+Custom-rendered text editors can instead package `android/java/io/github/xpjb/chad/ChadActivity.java` and name `io.github.xpjb.chad.ChadActivity` in the manifest. This optional API 30+ companion remains a NativeActivity while providing a transparent `EditText`, UTF-16 conversion, minimal UTF-8 splice events, composition/selection state, and per-frame keyboard viewport updates. Applications supply a bounded surrounding-text window through `Ctx::set_text_input` and receive `MobileEvent` through `android::App::mobile_event`; Chad never owns the application document. The Java source compiles directly with `javac` and `d8`, so this path does not require Gradle.
 
 - `init` runs once after the first GPU and surface are ready. `resumed` follows init and each surface resume.
 - `suspended` runs after the surface has been dropped. The game, device, and GPU resources stay alive within that runner.

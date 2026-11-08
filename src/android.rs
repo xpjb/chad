@@ -24,22 +24,18 @@ use winit::window::Window;
 
 pub use winit::platform::android::activity::AndroidApp;
 
-enum ActivityMethod {
-    ClearTextInput,
-    ShowKeyboard,
-    HideKeyboard,
-    ShowTextMenu,
+enum NativeEvent {
+    TextInput(crate::TextInputEvent),
+    Viewport(NativeViewport),
 }
 
-enum NativeEvent {
-    Mobile(MobileEvent),
-    Viewport {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        keyboard_visible: bool,
-    },
+#[derive(Clone, Copy)]
+struct NativeViewport {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    keyboard_visible: bool,
 }
 
 struct NativeRuntime {
@@ -49,7 +45,7 @@ struct NativeRuntime {
 }
 
 static NATIVE_RUNTIME: Mutex<Option<NativeRuntime>> = Mutex::new(None);
-static PENDING_VIEWPORT: Mutex<Option<(i32, i32, i32, i32, bool)>> = Mutex::new(None);
+static PENDING_VIEWPORT: Mutex<Option<NativeViewport>> = Mutex::new(None);
 
 fn wake_native(runtime: &NativeRuntime) {
     if let Some(window) = runtime.window.upgrade() {
@@ -116,44 +112,11 @@ impl Ctx {
         self.window.request_redraw();
     }
 
-    fn java(&self, method: ActivityMethod) -> Result<(), String> {
+    fn java(&self, method: &jni::strings::JNIStr) -> Result<(), String> {
         let vm = unsafe { JavaVM::from_raw(self.app.vm_as_ptr().cast()) };
         vm.attach_current_thread(|env| {
             let activity = unsafe { JObject::from_raw(env, self.app.activity_as_ptr().cast()) };
-            match method {
-                ActivityMethod::ClearTextInput => {
-                    env.call_method(
-                        &activity,
-                        jni::jni_str!("chadClearTextInput"),
-                        jni::jni_sig!("()V"),
-                        &[],
-                    )?;
-                }
-                ActivityMethod::ShowKeyboard => {
-                    env.call_method(
-                        &activity,
-                        jni::jni_str!("chadShowKeyboard"),
-                        jni::jni_sig!("()V"),
-                        &[],
-                    )?;
-                }
-                ActivityMethod::HideKeyboard => {
-                    env.call_method(
-                        &activity,
-                        jni::jni_str!("chadHideKeyboard"),
-                        jni::jni_sig!("()V"),
-                        &[],
-                    )?;
-                }
-                ActivityMethod::ShowTextMenu => {
-                    env.call_method(
-                        &activity,
-                        jni::jni_str!("chadShowTextMenu"),
-                        jni::jni_sig!("()V"),
-                        &[],
-                    )?;
-                }
-            }
+            env.call_method(&activity, method, jni::jni_sig!("()V"), &[])?;
             Ok::<_, jni::errors::Error>(())
         })
         .map_err(|error| format!("Android activity method: {error}"))
@@ -185,7 +148,6 @@ impl Ctx {
             .map_err(|_| "text input generation exceeds Android range")?;
         let document_start = i64::try_from(state.document_start)
             .map_err(|_| "text input document offset exceeds Android range")?;
-        let mut reset = false;
         if let Ok(mut guard) = NATIVE_RUNTIME.lock() {
             let runtime = guard.as_mut().ok_or("Android text input is not initialized")?;
             match runtime.mirror.as_mut() {
@@ -197,22 +159,14 @@ impl Ctx {
                     if mirror.text != state.text {
                         mirror.text.clear();
                         mirror.text.push_str(state.text);
-                        mirror.composition = None;
-                        reset = true;
                     }
-                    mirror.selection = state.selection;
                 }
-                _ => {
-                    runtime.mirror = Some(TextMirror {
-                        id: state.id,
-                        generation: state.generation,
-                        document_start: state.document_start,
-                        text: state.text.to_string(),
-                        selection: state.selection,
-                        composition: None,
-                    });
-                    reset = true;
-                }
+                _ => runtime.mirror = Some(TextMirror {
+                    id: state.id,
+                    generation: state.generation,
+                    document_start: state.document_start,
+                    text: state.text.to_string(),
+                }),
             }
         } else {
             return Err("Android text input state is unavailable".into());
@@ -238,19 +192,17 @@ impl Ctx {
                 JValue::Float(state.caret_rect.height),
                 JValue::Bool(state.options.multiline),
                 JValue::Bool(state.options.secure),
-                JValue::Bool(reset),
             ];
             let activity = unsafe { JObject::from_raw(env, self.app.activity_as_ptr().cast()) };
             env.call_method(
                 &activity,
                 jni::jni_str!("chadSetTextInput"),
-                jni::jni_sig!("(JJJLjava/lang/String;IIFFFFFFFFZZZ)V"),
+                jni::jni_sig!("(JJJLjava/lang/String;IIFFFFFFFFZZ)V"),
                 &arguments,
             )?;
             Ok::<_, jni::errors::Error>(())
         })
         .map_err(|error| format!("Android text input: {error}"))
-
     }
 
     pub fn clear_text_input(&mut self) -> Result<(), String> {
@@ -259,19 +211,19 @@ impl Ctx {
         {
             runtime.mirror = None;
         }
-        self.java(ActivityMethod::ClearTextInput)
+        self.java(jni::jni_str!("chadClearTextInput"))
     }
 
     pub fn show_keyboard(&self) -> Result<(), String> {
-        self.java(ActivityMethod::ShowKeyboard)
+        self.java(jni::jni_str!("chadShowKeyboard"))
     }
 
     pub fn hide_keyboard(&self) -> Result<(), String> {
-        self.java(ActivityMethod::HideKeyboard)
+        self.java(jni::jni_str!("chadHideKeyboard"))
     }
 
     pub fn show_text_menu(&self) -> Result<(), String> {
-        self.java(ActivityMethod::ShowTextMenu)
+        self.java(jni::jni_str!("chadShowTextMenu"))
     }
 
     /// Return from the Android runner. NativeActivity then finishes the activity.
@@ -383,20 +335,14 @@ impl<G: App> State<G> {
             .unwrap_or_default();
         for event in events {
             let event = match event {
-                NativeEvent::Mobile(event) => event,
-                NativeEvent::Viewport {
-                    left,
-                    top,
-                    right,
-                    bottom,
-                    keyboard_visible,
-                } => {
+                NativeEvent::TextInput(event) => MobileEvent::TextInput(event),
+                NativeEvent::Viewport(viewport) => {
                     let (width, height) = self.ctx.size;
                     let content = self.ctx.app.content_rect();
                     let mut visible = PhysicalRect::new(0.0, 0.0, width as f32, height as f32);
                     for (left, top, right, bottom) in [
                         (content.left, content.top, content.right, content.bottom),
-                        (left, top, right, bottom),
+                        (viewport.left, viewport.top, viewport.right, viewport.bottom),
                     ] {
                         if right > left && bottom > top {
                             let x = visible.x.max(left.max(0) as f32);
@@ -413,7 +359,7 @@ impl<G: App> State<G> {
                     }
                     let viewport = MobileViewport {
                         visible,
-                        keyboard_visible,
+                        keyboard_visible: viewport.keyboard_visible,
                     };
                     if viewport == self.ctx.mobile_viewport {
                         continue;
@@ -570,16 +516,10 @@ impl<G: App> ApplicationHandler for Runner<G> {
                     mirror: None,
                 });
                 if let Ok(mut viewport) = PENDING_VIEWPORT.lock()
-                    && let Some((left, top, right, bottom, keyboard_visible)) = viewport.take()
+                    && let Some(viewport) = viewport.take()
                     && let Some(runtime) = runtime.as_mut()
                 {
-                    runtime.events.push(NativeEvent::Viewport {
-                        left,
-                        top,
-                        right,
-                        bottom,
-                        keyboard_visible,
-                    });
+                    runtime.events.push(NativeEvent::Viewport(viewport));
                 }
             }
             let game = G::init(&mut ctx).map_err(|error| format!("Android game init: {error}"))?;
@@ -781,9 +721,7 @@ pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeTextInput(
                 )
             });
             if let Some(event) = event {
-                runtime
-                    .events
-                    .push(NativeEvent::Mobile(MobileEvent::TextInput(event)));
+                runtime.events.push(NativeEvent::TextInput(event));
                 wake_native(runtime);
             }
         }
@@ -803,23 +741,23 @@ pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeViewport(
     keyboard_visible: jboolean,
 ) {
     env.with_env(|_| {
-        let viewport = (left, top, right, bottom, keyboard_visible);
+        let viewport = NativeViewport {
+            left,
+            top,
+            right,
+            bottom,
+            keyboard_visible,
+        };
         if let Ok(mut pending) = PENDING_VIEWPORT.lock() {
             *pending = Some(viewport);
         }
         if let Ok(mut guard) = NATIVE_RUNTIME.lock()
             && let Some(runtime) = guard.as_mut()
         {
-            if matches!(runtime.events.last(), Some(NativeEvent::Viewport { .. })) {
+            if matches!(runtime.events.last(), Some(NativeEvent::Viewport(_))) {
                 runtime.events.pop();
             }
-            runtime.events.push(NativeEvent::Viewport {
-                left,
-                top,
-                right,
-                bottom,
-                keyboard_visible,
-            });
+            runtime.events.push(NativeEvent::Viewport(viewport));
             wake_native(runtime);
         }
         Ok::<_, jni::errors::Error>(())

@@ -2,27 +2,21 @@ package io.github.xpjb.chad;
 
 import android.app.NativeActivity;
 import android.graphics.Color;
-import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.ActionMode;
-import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsAnimation;
 import android.view.WindowManager;
 import android.view.inputmethod.BaseInputConnection;
-import android.view.inputmethod.CompletionInfo;
-import android.view.inputmethod.CorrectionInfo;
 import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputConnection;
-import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
-import android.view.inputmethod.TextAttribute;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 
@@ -36,15 +30,7 @@ public class ChadActivity extends NativeActivity {
 
     private MirrorInput input;
     private ActionMode inputMenu;
-    private long inputId;
-    private long inputGeneration;
-    private long documentStart;
-    private boolean inputMultiline;
-    private boolean inputSecure;
     private boolean updatingInput;
-    private boolean reportScheduled;
-    private boolean reportPending;
-    private int batchDepth;
     private final android.graphics.Rect lastViewport = new android.graphics.Rect();
     private boolean lastKeyboardVisible;
 
@@ -114,37 +100,28 @@ public class ChadActivity extends NativeActivity {
     public void chadSetTextInput(long id, long generation, long start, String text,
         int anchor, int focus, float fieldX, float fieldY, float fieldWidth, float fieldHeight,
         float caretX, float caretY, float caretWidth, float caretHeight,
-        boolean multiline, boolean secure, boolean reset) {
+        boolean multiline, boolean secure) {
         runOnUiThread(() -> {
-            if (input == null) createInput();
-            boolean configuration = id != inputId || generation != inputGeneration
-                || start != documentStart || multiline != inputMultiline || secure != inputSecure;
-            boolean changed = reset || configuration
-                || !input.getText().toString().equals(text);
+            boolean configuration = input == null || input.id != id
+                || input.generation != generation || input.documentStart != start
+                || input.multiline != multiline || input.secure != secure;
             if (configuration && inputMenu != null) {
                 inputMenu.finish();
                 inputMenu = null;
             }
             updatingInput = true;
-            inputId = id;
-            inputGeneration = generation;
-            documentStart = start;
-            inputMultiline = multiline;
-            inputSecure = secure;
             if (configuration) {
-                int type = InputType.TYPE_CLASS_TEXT;
-                if (secure) {
-                    type |= InputType.TYPE_TEXT_VARIATION_PASSWORD;
-                } else if (multiline) {
-                    type |= InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                        | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+                MirrorInput previous = input;
+                input = new MirrorInput(id, generation, start, multiline, secure);
+                addContentView(input, new FrameLayout.LayoutParams(1, 1));
+                if (previous != null) {
+                    previous.clearFocus();
+                    if (previous.getParent() instanceof ViewGroup) {
+                        ((ViewGroup)previous.getParent()).removeView(previous);
+                    }
                 }
-                input.setSingleLine(!multiline);
-                input.setInputType(type);
-                input.setImeOptions((multiline ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE)
-                    | EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN
-                    | (secure ? EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING : 0));
             }
+            boolean changed = configuration || !input.getText().toString().equals(text);
             if (changed) input.setText(text);
             int length = input.length();
             int safeAnchor = Math.max(0, Math.min(length, anchor));
@@ -180,7 +157,6 @@ public class ChadActivity extends NativeActivity {
                 inputMenu.invalidate();
                 inputMenu.invalidateContentRect();
             }
-            if (input.getVisibility() != View.VISIBLE) input.setVisibility(View.VISIBLE);
             if (!input.hasFocus()) input.requestFocus();
             updatingInput = false;
             if (changed) keyboard().restartInput(input);
@@ -189,28 +165,30 @@ public class ChadActivity extends NativeActivity {
 
     public void chadClearTextInput() {
         runOnUiThread(() -> {
-            inputId = 0;
-            reportPending = false;
             if (inputMenu != null) {
                 inputMenu.finish();
                 inputMenu = null;
             }
-            if (input != null) {
-                keyboard().hideSoftInputFromWindow(input.getWindowToken(), 0);
-                input.clearFocus();
-                input.setVisibility(View.GONE);
+            MirrorInput previous = input;
+            input = null;
+            if (previous != null) {
+                keyboard().hideSoftInputFromWindow(previous.getWindowToken(), 0);
+                previous.clearFocus();
+                if (previous.getParent() instanceof ViewGroup) {
+                    ((ViewGroup)previous.getParent()).removeView(previous);
+                }
             }
         });
     }
 
     public void chadShowKeyboard() {
         runOnUiThread(() -> {
-            if (inputId == 0 || input == null) return;
-            input.setVisibility(View.VISIBLE);
-            input.requestFocus();
-            input.post(() -> {
-                if (inputId != 0 && input.hasFocus()) {
-                    keyboard().showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+            MirrorInput target = input;
+            if (target == null) return;
+            target.requestFocus();
+            target.post(() -> {
+                if (input == target && target.hasFocus()) {
+                    keyboard().showSoftInput(target, InputMethodManager.SHOW_IMPLICIT);
                 }
             });
         });
@@ -230,15 +208,12 @@ public class ChadActivity extends NativeActivity {
 
     public void chadShowTextMenu() {
         runOnUiThread(() -> {
-            if (inputId == 0 || input == null) return;
+            final MirrorInput target = input;
+            if (target == null) return;
             if (inputMenu != null) inputMenu.finish();
-            final long id = inputId;
-            final long generation = inputGeneration;
-            final long start = documentStart;
-            inputMenu = input.startActionMode(new ActionMode.Callback2() {
+            inputMenu = target.startActionMode(new ActionMode.Callback2() {
                 private boolean active() {
-                    return inputId == id && inputGeneration == generation
-                        && documentStart == start;
+                    return input == target;
                 }
 
                 @Override public boolean onCreateActionMode(ActionMode mode, Menu menu) {
@@ -254,16 +229,14 @@ public class ChadActivity extends NativeActivity {
                 }
 
                 @Override public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
-                    boolean selected = input.getSelectionStart() != input.getSelectionEnd();
-                    boolean secret = input.getTransformationMethod()
-                        instanceof android.text.method.PasswordTransformationMethod;
-                    menu.findItem(android.R.id.cut).setVisible(selected && !secret);
-                    menu.findItem(android.R.id.copy).setVisible(selected && !secret);
+                    boolean selected = target.getSelectionStart() != target.getSelectionEnd();
+                    menu.findItem(android.R.id.cut).setVisible(selected && !target.secure);
+                    menu.findItem(android.R.id.copy).setVisible(selected && !target.secure);
                     menu.findItem(android.R.id.paste).setEnabled(
                         ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
                             .hasPrimaryClip());
-                    menu.findItem(android.R.id.selectAll).setEnabled(input.length() > 0);
-                    return true;
+                    menu.findItem(android.R.id.selectAll).setEnabled(target.length() > 0);
+                    return active();
                 }
 
                 @Override public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
@@ -272,19 +245,18 @@ public class ChadActivity extends NativeActivity {
                         return false;
                     }
                     if (item.getItemId() == android.R.id.selectAll) {
-                        input.setSelection(0, input.length());
+                        target.setSelection(0, target.length());
                         mode.invalidate();
                     } else {
-                        input.onTextContextMenuItem(item.getItemId());
+                        target.onTextContextMenuItem(item.getItemId());
                         mode.finish();
                     }
-                    scheduleReport();
                     return true;
                 }
 
                 @Override public void onGetContentRect(ActionMode mode, View view,
                     android.graphics.Rect rectangle) {
-                    rectangle.set(input.caretRect);
+                    rectangle.set(target.caretRect);
                 }
 
                 @Override public void onDestroyActionMode(ActionMode mode) {
@@ -294,56 +266,70 @@ public class ChadActivity extends NativeActivity {
         });
     }
 
-    private void createInput() {
-        input = new MirrorInput();
-        input.setAlpha(0.0f);
-        input.setTextColor(Color.TRANSPARENT);
-        input.setHighlightColor(Color.TRANSPARENT);
-        input.setCursorVisible(false);
-        input.setBackground(null);
-        input.setShowSoftInputOnFocus(false);
-        input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-        input.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence value, int start, int count,
-                int after) {}
-            @Override public void onTextChanged(CharSequence value, int start, int before,
-                int count) {}
-            @Override public void afterTextChanged(Editable value) { scheduleReport(); }
+    private void scheduleReport(MirrorInput source) {
+        if (updatingInput || source != input || source.reportScheduled) return;
+        source.reportScheduled = true;
+        source.post(() -> {
+            source.reportScheduled = false;
+            if (updatingInput || source != input) return;
+            Editable value = source.getText();
+            nativeTextInput(source.id, source.generation, source.documentStart, value.toString(),
+                source.getSelectionStart(), source.getSelectionEnd(),
+                BaseInputConnection.getComposingSpanStart(value),
+                BaseInputConnection.getComposingSpanEnd(value));
         });
-        addContentView(input, new FrameLayout.LayoutParams(1, 1));
-    }
-
-    private void scheduleReport() {
-        if (updatingInput || inputId == 0 || input == null) return;
-        if (batchDepth > 0) {
-            reportPending = true;
-            return;
-        }
-        if (reportScheduled) return;
-        reportScheduled = true;
-        input.post(() -> {
-            reportScheduled = false;
-            reportEdit();
-        });
-    }
-
-    private void reportEdit() {
-        if (updatingInput || inputId == 0 || input == null) return;
-        Editable value = input.getText();
-        nativeTextInput(inputId, inputGeneration, documentStart, value.toString(),
-            input.getSelectionStart(), input.getSelectionEnd(),
-            BaseInputConnection.getComposingSpanStart(value),
-            BaseInputConnection.getComposingSpanEnd(value));
     }
 
     private final class MirrorInput extends EditText {
+        final long id;
+        final long generation;
+        final long documentStart;
+        final boolean multiline;
+        final boolean secure;
         final android.graphics.Rect caretRect = new android.graphics.Rect();
+        boolean reportScheduled;
 
-        MirrorInput() { super(ChadActivity.this); }
+        MirrorInput(long id, long generation, long documentStart,
+            boolean multiline, boolean secure) {
+            super(ChadActivity.this);
+            this.id = id;
+            this.generation = generation;
+            this.documentStart = documentStart;
+            this.multiline = multiline;
+            this.secure = secure;
+            int type = InputType.TYPE_CLASS_TEXT;
+            if (secure) {
+                type |= InputType.TYPE_TEXT_VARIATION_PASSWORD;
+            } else if (multiline) {
+                type |= InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+            }
+            setSingleLine(!multiline);
+            setInputType(type);
+            setImeOptions((multiline ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE)
+                | EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN
+                | (secure ? EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING : 0));
+            setAlpha(0.0f);
+            setTextColor(Color.TRANSPARENT);
+            setHighlightColor(Color.TRANSPARENT);
+            setCursorVisible(false);
+            setBackground(null);
+            setShowSoftInputOnFocus(false);
+            setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+            addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence value, int start, int count,
+                    int after) {}
+                @Override public void onTextChanged(CharSequence value, int start, int before,
+                    int count) {}
+                @Override public void afterTextChanged(Editable value) {
+                    scheduleReport(MirrorInput.this);
+                }
+            });
+        }
 
         @Override protected void onSelectionChanged(int start, int end) {
             super.onSelectionChanged(start, end);
-            scheduleReport();
+            scheduleReport(this);
         }
 
         @Override public boolean requestRectangleOnScreen(android.graphics.Rect rectangle,
@@ -353,115 +339,6 @@ public class ChadActivity extends NativeActivity {
 
         @Override public boolean onTouchEvent(android.view.MotionEvent event) {
             return false;
-        }
-
-        @Override public InputConnection onCreateInputConnection(EditorInfo info) {
-            InputConnection connection = super.onCreateInputConnection(info);
-            if (connection == null) return null;
-            if (Build.VERSION.SDK_INT >= 34) return new ReplacementConnection(connection);
-            if (Build.VERSION.SDK_INT >= 33) return new AttributedConnection(connection);
-            return new MirrorConnection(connection);
-        }
-    }
-
-    private class MirrorConnection extends InputConnectionWrapper {
-        private final long id = inputId;
-        private final long generation = inputGeneration;
-        private final long start = documentStart;
-
-        MirrorConnection(InputConnection connection) { super(connection, false); }
-
-        boolean active() {
-            return inputId == id && inputGeneration == generation && documentStart == start
-                && id != 0;
-        }
-
-        boolean report(boolean result) {
-            scheduleReport();
-            return result;
-        }
-
-        @Override public boolean beginBatchEdit() {
-            if (!active() || !super.beginBatchEdit()) return false;
-            batchDepth += 1;
-            return true;
-        }
-
-        @Override public boolean endBatchEdit() {
-            if (!active()) return false;
-            boolean result = super.endBatchEdit();
-            batchDepth = Math.max(0, batchDepth - 1);
-            if (batchDepth == 0 && reportPending) {
-                reportPending = false;
-                scheduleReport();
-            }
-            return result;
-        }
-
-        @Override public boolean setComposingText(CharSequence text, int position) {
-            return active() && report(super.setComposingText(text, position));
-        }
-        @Override public boolean setComposingRegion(int start, int end) {
-            return active() && report(super.setComposingRegion(start, end));
-        }
-        @Override public boolean finishComposingText() {
-            return active() && report(super.finishComposingText());
-        }
-        @Override public boolean commitText(CharSequence text, int position) {
-            return active() && report(super.commitText(text, position));
-        }
-        @Override public boolean setSelection(int start, int end) {
-            return active() && report(super.setSelection(start, end));
-        }
-        @Override public boolean deleteSurroundingText(int before, int after) {
-            return active() && report(super.deleteSurroundingText(before, after));
-        }
-        @Override public boolean deleteSurroundingTextInCodePoints(int before, int after) {
-            return active() && report(super.deleteSurroundingTextInCodePoints(before, after));
-        }
-        @Override public boolean sendKeyEvent(KeyEvent event) {
-            return active() && report(super.sendKeyEvent(event));
-        }
-        @Override public boolean performContextMenuAction(int action) {
-            return active() && report(super.performContextMenuAction(action));
-        }
-        @Override public boolean performEditorAction(int action) {
-            return active() && report(super.performEditorAction(action));
-        }
-        @Override public boolean commitCompletion(CompletionInfo completion) {
-            return active() && report(super.commitCompletion(completion));
-        }
-        @Override public boolean commitCorrection(CorrectionInfo correction) {
-            return active() && report(super.commitCorrection(correction));
-        }
-        @Override public void closeConnection() {
-            if (active()) super.closeConnection();
-        }
-    }
-
-    private class AttributedConnection extends MirrorConnection {
-        AttributedConnection(InputConnection connection) { super(connection); }
-
-        @Override public boolean commitText(CharSequence text, int position,
-            TextAttribute attributes) {
-            return active() && report(super.commitText(text, position, attributes));
-        }
-        @Override public boolean setComposingText(CharSequence text, int position,
-            TextAttribute attributes) {
-            return active() && report(super.setComposingText(text, position, attributes));
-        }
-        @Override public boolean setComposingRegion(int start, int end,
-            TextAttribute attributes) {
-            return active() && report(super.setComposingRegion(start, end, attributes));
-        }
-    }
-
-    private final class ReplacementConnection extends AttributedConnection {
-        ReplacementConnection(InputConnection connection) { super(connection); }
-
-        @Override public boolean replaceText(int start, int end, CharSequence text, int position,
-            TextAttribute attributes) {
-            return active() && report(super.replaceText(start, end, text, position, attributes));
         }
     }
 }

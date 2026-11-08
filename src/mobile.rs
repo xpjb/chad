@@ -89,8 +89,6 @@ pub(crate) struct TextMirror {
     pub generation: u64,
     pub document_start: usize,
     pub text: String,
-    pub selection: Selection,
-    pub composition: Option<Range<usize>>,
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -201,13 +199,7 @@ pub(crate) fn apply_native_snapshot(
         })
     };
 
-    if splice.is_none() && mirror.selection == selection && mirror.composition == composition {
-        return None;
-    }
-
     mirror.text = snapshot.text;
-    mirror.selection = selection;
-    mirror.composition = composition.clone();
     Some(TextInputEvent {
         id: mirror.id,
         generation: mirror.generation,
@@ -271,13 +263,11 @@ mod tests {
             generation: 3,
             document_start: 100,
             text: text.to_string(),
-            selection: Selection::new(100, 100),
-            composition: None,
         }
     }
 
     #[test]
-    fn snapshot_becomes_one_unicode_splice() {
+    fn native_snapshot_preserves_unicode_and_rejects_stale_state() {
         let mut mirror = mirror("a🐻c");
         let event = apply_native_snapshot(
             &mut mirror,
@@ -286,10 +276,10 @@ mod tests {
                 generation: 3,
                 document_start: 100,
                 text: "a世界c".into(),
-                selection_start_utf16: 3,
+                selection_start_utf16: 1,
                 selection_end_utf16: 3,
-                composition_start_utf16: -1,
-                composition_end_utf16: -1,
+                composition_start_utf16: 1,
+                composition_end_utf16: 3,
             },
         )
         .unwrap();
@@ -297,34 +287,9 @@ mod tests {
             range: 101..105,
             replacement: "世界".into(),
         }));
-        assert_eq!(event.selection, Selection::new(107, 107));
-    }
+        assert_eq!(event.selection, Selection::new(101, 107));
+        assert_eq!(event.composition, Some(101..107));
 
-    #[test]
-    fn selection_and_composition_can_change_without_text() {
-        let mut mirror = mirror("hello");
-        let event = apply_native_snapshot(
-            &mut mirror,
-            NativeTextSnapshot {
-                id: 7,
-                generation: 3,
-                document_start: 100,
-                text: "hello".into(),
-                selection_start_utf16: 1,
-                selection_end_utf16: 4,
-                composition_start_utf16: 1,
-                composition_end_utf16: 4,
-            },
-        )
-        .unwrap();
-        assert!(event.splice.is_none());
-        assert_eq!(event.selection, Selection::new(101, 104));
-        assert_eq!(event.composition, Some(101..104));
-    }
-
-    #[test]
-    fn stale_snapshots_are_dropped() {
-        let mut mirror = mirror("hello");
         assert!(apply_native_snapshot(
             &mut mirror,
             NativeTextSnapshot {
@@ -339,7 +304,9 @@ mod tests {
             },
         )
         .is_none());
-        assert_eq!(mirror.text, "hello");
+        assert_eq!(mirror.text, "a世界c");
+        assert_eq!(utf16_to_byte("a🐻b", 2), 1);
+        assert_eq!(byte_to_utf16("a🐻b", 5), Some(3));
     }
 
     #[test]
@@ -356,13 +323,5 @@ mod tests {
         assert_eq!(&window[local], "🐻");
         assert_eq!(selection.anchor, bear);
         assert!(window.encode_utf16().count() <= 8);
-    }
-
-    #[test]
-    fn utf16_offsets_never_split_surrogates() {
-        assert_eq!(utf16_to_byte("a🐻b", 2), 1);
-        assert_eq!(utf16_to_byte("a🐻b", 3), 5);
-        assert_eq!(byte_to_utf16("a🐻b", 5), Some(3));
-        assert_eq!(byte_to_utf16("a🐻b", 3), None);
     }
 }

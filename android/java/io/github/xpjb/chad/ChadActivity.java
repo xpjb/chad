@@ -35,11 +35,14 @@ public class ChadActivity extends NativeActivity {
     private long inputId;
     private long inputGeneration;
     private long documentStart;
+    private boolean inputMultiline;
+    private boolean inputSecure;
     private boolean updatingInput;
     private boolean reportScheduled;
     private boolean reportPending;
     private int batchDepth;
     private final android.graphics.Rect lastViewport = new android.graphics.Rect();
+    private boolean lastKeyboardVisible;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -94,11 +97,13 @@ public class ChadActivity extends NativeActivity {
         int[] origin = new int[2];
         decor.getLocationOnScreen(origin);
         visible.offset(-origin[0], -origin[1]);
+        boolean keyboardVisible = insets.isVisible(WindowInsets.Type.ime());
         if (visible.intersect(0, 0, decor.getWidth(), decor.getHeight())
-            && !lastViewport.equals(visible)) {
+            && (!lastViewport.equals(visible) || keyboardVisible != lastKeyboardVisible)) {
             lastViewport.set(visible);
+            lastKeyboardVisible = keyboardVisible;
             nativeViewport(visible.left, visible.top, visible.right, visible.bottom,
-                insets.isVisible(WindowInsets.Type.ime()));
+                keyboardVisible);
         }
     }
 
@@ -108,24 +113,30 @@ public class ChadActivity extends NativeActivity {
         boolean multiline, boolean secure, boolean reset) {
         runOnUiThread(() -> {
             if (input == null) createInput();
-            boolean changed = reset || id != inputId || generation != inputGeneration
-                || start != documentStart || !input.getText().toString().equals(text);
+            boolean configuration = id != inputId || generation != inputGeneration
+                || start != documentStart || multiline != inputMultiline || secure != inputSecure;
+            boolean changed = reset || configuration
+                || !input.getText().toString().equals(text);
             updatingInput = true;
             inputId = id;
             inputGeneration = generation;
             documentStart = start;
-            int type = InputType.TYPE_CLASS_TEXT;
-            if (secure) {
-                type |= InputType.TYPE_TEXT_VARIATION_PASSWORD;
-            } else if (multiline) {
-                type |= InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                    | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+            inputMultiline = multiline;
+            inputSecure = secure;
+            if (configuration) {
+                int type = InputType.TYPE_CLASS_TEXT;
+                if (secure) {
+                    type |= InputType.TYPE_TEXT_VARIATION_PASSWORD;
+                } else if (multiline) {
+                    type |= InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                        | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+                }
+                input.setSingleLine(!multiline);
+                input.setInputType(type);
+                input.setImeOptions((multiline ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE)
+                    | EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN
+                    | (secure ? EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING : 0));
             }
-            input.setSingleLine(!multiline);
-            input.setInputType(type);
-            input.setImeOptions((multiline ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE)
-                | EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN
-                | (secure ? EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING : 0));
             if (changed) input.setText(text);
             int length = input.length();
             int safeAnchor = Math.max(0, Math.min(length, anchor));
@@ -139,19 +150,26 @@ public class ChadActivity extends NativeActivity {
             int[] decorAt = new int[2];
             content.getLocationInWindow(contentAt);
             getWindow().getDecorView().getLocationInWindow(decorAt);
-            FrameLayout.LayoutParams layout = new FrameLayout.LayoutParams(
-                Math.max(1, (int)Math.ceil(fieldWidth)),
-                Math.max(1, (int)Math.ceil(fieldHeight)));
-            layout.leftMargin = Math.round(fieldX) + decorAt[0] - contentAt[0];
-            layout.topMargin = Math.round(fieldY) + decorAt[1] - contentAt[1];
-            input.setLayoutParams(layout);
+            int width = Math.max(1, (int)Math.ceil(fieldWidth));
+            int height = Math.max(1, (int)Math.ceil(fieldHeight));
+            int left = Math.round(fieldX) + decorAt[0] - contentAt[0];
+            int top = Math.round(fieldY) + decorAt[1] - contentAt[1];
+            FrameLayout.LayoutParams layout = (FrameLayout.LayoutParams)input.getLayoutParams();
+            if (layout.width != width || layout.height != height
+                || layout.leftMargin != left || layout.topMargin != top) {
+                layout.width = width;
+                layout.height = height;
+                layout.leftMargin = left;
+                layout.topMargin = top;
+                input.setLayoutParams(layout);
+            }
             input.caretRect.set(
                 (int)Math.floor(caretX - fieldX),
                 (int)Math.floor(caretY - fieldY),
                 (int)Math.ceil(caretX - fieldX + Math.max(1.0f, caretWidth)),
                 (int)Math.ceil(caretY - fieldY + Math.max(1.0f, caretHeight)));
-            input.setVisibility(View.VISIBLE);
-            input.requestFocus();
+            if (input.getVisibility() != View.VISIBLE) input.setVisibility(View.VISIBLE);
+            if (!input.hasFocus()) input.requestFocus();
             updatingInput = false;
             if (changed) keyboard().restartInput(input);
         });

@@ -7,7 +7,10 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.view.ActionMode;
 import android.view.KeyEvent;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsAnimation;
@@ -32,6 +35,7 @@ public class ChadActivity extends NativeActivity {
         boolean keyboardVisible);
 
     private MirrorInput input;
+    private ActionMode inputMenu;
     private long inputId;
     private long inputGeneration;
     private long documentStart;
@@ -117,6 +121,10 @@ public class ChadActivity extends NativeActivity {
                 || start != documentStart || multiline != inputMultiline || secure != inputSecure;
             boolean changed = reset || configuration
                 || !input.getText().toString().equals(text);
+            if (configuration && inputMenu != null) {
+                inputMenu.finish();
+                inputMenu = null;
+            }
             updatingInput = true;
             inputId = id;
             inputGeneration = generation;
@@ -168,6 +176,10 @@ public class ChadActivity extends NativeActivity {
                 (int)Math.floor(caretY - fieldY),
                 (int)Math.ceil(caretX - fieldX + Math.max(1.0f, caretWidth)),
                 (int)Math.ceil(caretY - fieldY + Math.max(1.0f, caretHeight)));
+            if (inputMenu != null) {
+                inputMenu.invalidate();
+                inputMenu.invalidateContentRect();
+            }
             if (input.getVisibility() != View.VISIBLE) input.setVisibility(View.VISIBLE);
             if (!input.hasFocus()) input.requestFocus();
             updatingInput = false;
@@ -179,6 +191,10 @@ public class ChadActivity extends NativeActivity {
         runOnUiThread(() -> {
             inputId = 0;
             reportPending = false;
+            if (inputMenu != null) {
+                inputMenu.finish();
+                inputMenu = null;
+            }
             if (input != null) {
                 keyboard().hideSoftInputFromWindow(input.getWindowToken(), 0);
                 input.clearFocus();
@@ -203,6 +219,78 @@ public class ChadActivity extends NativeActivity {
     public void chadHideKeyboard() {
         runOnUiThread(() -> {
             if (input != null) keyboard().hideSoftInputFromWindow(input.getWindowToken(), 0);
+        });
+    }
+
+    public boolean chadHideKeyboardIfVisible() {
+        if (!lastKeyboardVisible) return false;
+        chadHideKeyboard();
+        return true;
+    }
+
+    public void chadShowTextMenu() {
+        runOnUiThread(() -> {
+            if (inputId == 0 || input == null) return;
+            if (inputMenu != null) inputMenu.finish();
+            final long id = inputId;
+            final long generation = inputGeneration;
+            final long start = documentStart;
+            inputMenu = input.startActionMode(new ActionMode.Callback2() {
+                private boolean active() {
+                    return inputId == id && inputGeneration == generation
+                        && documentStart == start;
+                }
+
+                @Override public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                    menu.add(0, android.R.id.cut, 0, android.R.string.cut)
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
+                    menu.add(0, android.R.id.copy, 1, android.R.string.copy)
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
+                    menu.add(0, android.R.id.paste, 2, android.R.string.paste)
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
+                    menu.add(0, android.R.id.selectAll, 3, android.R.string.selectAll)
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
+                    return active();
+                }
+
+                @Override public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+                    boolean selected = input.getSelectionStart() != input.getSelectionEnd();
+                    boolean secret = input.getTransformationMethod()
+                        instanceof android.text.method.PasswordTransformationMethod;
+                    menu.findItem(android.R.id.cut).setVisible(selected && !secret);
+                    menu.findItem(android.R.id.copy).setVisible(selected && !secret);
+                    menu.findItem(android.R.id.paste).setEnabled(
+                        ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
+                            .hasPrimaryClip());
+                    menu.findItem(android.R.id.selectAll).setEnabled(input.length() > 0);
+                    return true;
+                }
+
+                @Override public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                    if (!active()) {
+                        mode.finish();
+                        return false;
+                    }
+                    if (item.getItemId() == android.R.id.selectAll) {
+                        input.setSelection(0, input.length());
+                        mode.invalidate();
+                    } else {
+                        input.onTextContextMenuItem(item.getItemId());
+                        mode.finish();
+                    }
+                    scheduleReport();
+                    return true;
+                }
+
+                @Override public void onGetContentRect(ActionMode mode, View view,
+                    android.graphics.Rect rectangle) {
+                    rectangle.set(input.caretRect);
+                }
+
+                @Override public void onDestroyActionMode(ActionMode mode) {
+                    if (inputMenu == mode) inputMenu = null;
+                }
+            }, ActionMode.TYPE_FLOATING);
         });
     }
 

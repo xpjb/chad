@@ -28,6 +28,7 @@ enum ActivityMethod {
     ClearTextInput,
     ShowKeyboard,
     HideKeyboard,
+    ShowTextMenu,
 }
 
 enum NativeEvent {
@@ -140,6 +141,14 @@ impl Ctx {
                     env.call_method(
                         &activity,
                         jni::jni_str!("chadHideKeyboard"),
+                        jni::jni_sig!("()V"),
+                        &[],
+                    )?;
+                }
+                ActivityMethod::ShowTextMenu => {
+                    env.call_method(
+                        &activity,
+                        jni::jni_str!("chadShowTextMenu"),
                         jni::jni_sig!("()V"),
                         &[],
                     )?;
@@ -259,6 +268,10 @@ impl Ctx {
 
     pub fn hide_keyboard(&self) -> Result<(), String> {
         self.java(ActivityMethod::HideKeyboard)
+    }
+
+    pub fn show_text_menu(&self) -> Result<(), String> {
+        self.java(ActivityMethod::ShowTextMenu)
     }
 
     /// Return from the Android runner. NativeActivity then finishes the activity.

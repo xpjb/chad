@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::ops::Range;
 
 /// A rectangle in physical surface pixels.
@@ -220,11 +219,11 @@ pub(crate) fn apply_native_snapshot(
 
 /// Extract at most `max_utf16` UTF-16 code units around a UTF-8 selection.
 /// The complete selection is always retained, even when it exceeds the budget.
-pub fn surrounding_text<'a>(
-    text: &'a str,
+pub fn surrounding_text(
+    text: &str,
     selection: Selection,
     max_utf16: usize,
-) -> Option<(usize, Cow<'a, str>, Selection)> {
+) -> Option<(usize, &str, Selection)> {
     let range = selection.range();
     if range.end > text.len()
         || !text.is_char_boundary(range.start)
@@ -259,7 +258,7 @@ pub fn surrounding_text<'a>(
         end = range.end + offset + character.len_utf8();
     }
 
-    Some((start, Cow::Borrowed(&text[start..end]), selection))
+    Some((start, &text[start..end], selection))
 }
 
 #[cfg(test)]

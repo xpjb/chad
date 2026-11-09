@@ -222,6 +222,10 @@ impl Ctx {
         self.java(jni::jni_str!("chadHideKeyboard"))
     }
 
+    pub fn move_task_to_back(&self) -> Result<(), String> {
+        self.java(jni::jni_str!("chadMoveTaskToBack"))
+    }
+
     pub fn show_text_menu(&self) -> Result<(), String> {
         self.java(jni::jni_str!("chadShowTextMenu"))
     }

@@ -206,6 +206,10 @@ public class ChadActivity extends NativeActivity {
         return true;
     }
 
+    public void chadMoveTaskToBack() {
+        runOnUiThread(() -> moveTaskToBack(true));
+    }
+
     public void chadShowTextMenu() {
         runOnUiThread(() -> {
             final MirrorInput target = input;

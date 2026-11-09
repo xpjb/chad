@@ -2,11 +2,13 @@ package io.github.xpjb.chad;
 
 import android.app.NativeActivity;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.ActionMode;
+import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -15,8 +17,13 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsAnimation;
 import android.view.WindowManager;
 import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.CompletionInfo;
+import android.view.inputmethod.CorrectionInfo;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.TextAttribute;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 
@@ -121,12 +128,11 @@ public class ChadActivity extends NativeActivity {
                     }
                 }
             }
-            boolean changed = configuration || !input.getText().toString().equals(text);
-            if (changed) input.setText(text);
-            int length = input.length();
-            int safeAnchor = Math.max(0, Math.min(length, anchor));
-            int safeFocus = Math.max(0, Math.min(length, focus));
-            if (input.getSelectionStart() != safeAnchor || input.getSelectionEnd() != safeFocus) {
+            if (configuration) {
+                input.setText(text);
+                int length = input.length();
+                int safeAnchor = Math.max(0, Math.min(length, anchor));
+                int safeFocus = Math.max(0, Math.min(length, focus));
                 input.setSelection(safeAnchor, safeFocus);
             }
 
@@ -159,7 +165,7 @@ public class ChadActivity extends NativeActivity {
             }
             if (!input.hasFocus()) input.requestFocus();
             updatingInput = false;
-            if (changed) keyboard().restartInput(input);
+            if (configuration) keyboard().restartInput(input);
         });
     }
 
@@ -271,7 +277,12 @@ public class ChadActivity extends NativeActivity {
     }
 
     private void scheduleReport(MirrorInput source) {
-        if (updatingInput || source != input || source.reportScheduled) return;
+        if (updatingInput || source != input) return;
+        if (source.batchDepth > 0) {
+            source.reportPending = true;
+            return;
+        }
+        if (source.reportScheduled) return;
         source.reportScheduled = true;
         source.post(() -> {
             source.reportScheduled = false;
@@ -284,6 +295,174 @@ public class ChadActivity extends NativeActivity {
         });
     }
 
+    private class MirrorConnection extends InputConnectionWrapper {
+        final MirrorInput source;
+
+        MirrorConnection(InputConnection target, MirrorInput source) {
+            super(target, false);
+            this.source = source;
+        }
+
+        final boolean active() {
+            return input == source;
+        }
+
+        final void changed() {
+            scheduleReport(source);
+        }
+
+        @Override public boolean beginBatchEdit() {
+            if (!active()) return false;
+            boolean result = super.beginBatchEdit();
+            if (result) source.batchDepth++;
+            return result;
+        }
+
+        @Override public boolean endBatchEdit() {
+            if (!active()) return false;
+            boolean result = super.endBatchEdit();
+            if (source.batchDepth > 0) source.batchDepth--;
+            if (source.batchDepth == 0 && source.reportPending) {
+                source.reportPending = false;
+                changed();
+            }
+            return result;
+        }
+
+        @Override public boolean setComposingText(CharSequence text, int cursor) {
+            if (!active()) return false;
+            boolean result = super.setComposingText(text, cursor);
+            changed();
+            return result;
+        }
+
+        @Override public boolean setComposingRegion(int start, int end) {
+            if (!active()) return false;
+            boolean result = super.setComposingRegion(start, end);
+            changed();
+            return result;
+        }
+
+        @Override public boolean finishComposingText() {
+            if (!active()) return false;
+            boolean result = super.finishComposingText();
+            changed();
+            return result;
+        }
+
+        @Override public boolean commitText(CharSequence text, int cursor) {
+            if (!active()) return false;
+            boolean result = super.commitText(text, cursor);
+            changed();
+            return result;
+        }
+
+        @Override public boolean commitCompletion(CompletionInfo completion) {
+            if (!active()) return false;
+            boolean result = super.commitCompletion(completion);
+            changed();
+            return result;
+        }
+
+        @Override public boolean commitCorrection(CorrectionInfo correction) {
+            if (!active()) return false;
+            boolean result = super.commitCorrection(correction);
+            changed();
+            return result;
+        }
+
+        @Override public boolean setSelection(int start, int end) {
+            if (!active()) return false;
+            boolean result = super.setSelection(start, end);
+            changed();
+            return result;
+        }
+
+        @Override public boolean deleteSurroundingText(int before, int after) {
+            if (!active()) return false;
+            boolean result = super.deleteSurroundingText(before, after);
+            changed();
+            return result;
+        }
+
+        @Override public boolean deleteSurroundingTextInCodePoints(int before, int after) {
+            if (!active()) return false;
+            boolean result = super.deleteSurroundingTextInCodePoints(before, after);
+            changed();
+            return result;
+        }
+
+        @Override public boolean sendKeyEvent(KeyEvent event) {
+            if (!active()) return false;
+            boolean result = source.dispatchKeyEvent(event);
+            changed();
+            return result;
+        }
+
+        @Override public boolean performContextMenuAction(int action) {
+            if (!active()) return false;
+            boolean result = super.performContextMenuAction(action);
+            changed();
+            return result;
+        }
+
+        @Override public boolean performEditorAction(int action) {
+            if (!active()) return false;
+            boolean result = super.performEditorAction(action);
+            changed();
+            return result;
+        }
+
+        @Override public void closeConnection() {
+            if (active()) super.closeConnection();
+        }
+    }
+
+    // Keep newer parameter types out of the connection class loaded on Android 10-12.
+    private class AttributedConnection extends MirrorConnection {
+        AttributedConnection(InputConnection target, MirrorInput source) {
+            super(target, source);
+        }
+
+        @Override public boolean setComposingText(CharSequence text, int cursor,
+            TextAttribute attribute) {
+            if (!active()) return false;
+            boolean result = super.setComposingText(text, cursor, attribute);
+            changed();
+            return result;
+        }
+
+        @Override public boolean setComposingRegion(int start, int end,
+            TextAttribute attribute) {
+            if (!active()) return false;
+            boolean result = super.setComposingRegion(start, end, attribute);
+            changed();
+            return result;
+        }
+
+        @Override public boolean commitText(CharSequence text, int cursor,
+            TextAttribute attribute) {
+            if (!active()) return false;
+            boolean result = super.commitText(text, cursor, attribute);
+            changed();
+            return result;
+        }
+    }
+
+    private final class ReplacementConnection extends AttributedConnection {
+        ReplacementConnection(InputConnection target, MirrorInput source) {
+            super(target, source);
+        }
+
+        @Override public boolean replaceText(int start, int end, CharSequence text, int cursor,
+            TextAttribute attribute) {
+            if (!active()) return false;
+            boolean result = super.replaceText(start, end, text, cursor, attribute);
+            changed();
+            return result;
+        }
+    }
+
     private final class MirrorInput extends EditText {
         final long id;
         final long generation;
@@ -291,6 +470,8 @@ public class ChadActivity extends NativeActivity {
         final boolean multiline;
         final boolean secure;
         final android.graphics.Rect caretRect = new android.graphics.Rect();
+        int batchDepth;
+        boolean reportPending;
         boolean reportScheduled;
 
         MirrorInput(long id, long generation, long documentStart,
@@ -320,6 +501,11 @@ public class ChadActivity extends NativeActivity {
             setBackground(null);
             setShowSoftInputOnFocus(false);
             setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+            setOnEditorActionListener((view, action, event) -> {
+                if (action != EditorInfo.IME_ACTION_DONE) return false;
+                chadHideKeyboard();
+                return true;
+            });
             addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence value, int start, int count,
                     int after) {}
@@ -334,6 +520,14 @@ public class ChadActivity extends NativeActivity {
         @Override protected void onSelectionChanged(int start, int end) {
             super.onSelectionChanged(start, end);
             scheduleReport(this);
+        }
+
+        @Override public InputConnection onCreateInputConnection(EditorInfo info) {
+            InputConnection base = super.onCreateInputConnection(info);
+            if (base == null) return null;
+            if (Build.VERSION.SDK_INT >= 34) return new ReplacementConnection(base, this);
+            if (Build.VERSION.SDK_INT >= 33) return new AttributedConnection(base, this);
+            return new MirrorConnection(base, this);
         }
 
         @Override public boolean requestRectangleOnScreen(android.graphics.Rect rectangle,

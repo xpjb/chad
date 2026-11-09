@@ -42,7 +42,8 @@ pub struct TextInputOptions {
 /// Text and selection use global UTF-8 document byte offsets.
 pub struct TextInputState<'a> {
     pub id: u64,
-    /// Increment when application code replaces or recenters the native mirror.
+    /// Increment after every application-owned text or selection change, and when
+    /// replacing or recentering the native mirror. Native edits keep this value.
     pub generation: u64,
     pub document_start: usize,
     pub text: &'a str,
@@ -89,6 +90,10 @@ pub(crate) struct TextMirror {
     pub generation: u64,
     pub document_start: usize,
     pub text: String,
+    pub selection: Selection,
+    pub composition: Option<Range<usize>>,
+    #[cfg_attr(test, allow(dead_code))]
+    pub options: TextInputOptions,
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -199,7 +204,13 @@ pub(crate) fn apply_native_snapshot(
         })
     };
 
+    if splice.is_none() && mirror.selection == selection && mirror.composition == composition {
+        return None;
+    }
+
     mirror.text = snapshot.text;
+    mirror.selection = selection;
+    mirror.composition = composition.clone();
     Some(TextInputEvent {
         id: mirror.id,
         generation: mirror.generation,
@@ -263,6 +274,9 @@ mod tests {
             generation: 3,
             document_start: 100,
             text: text.to_string(),
+            selection: Selection::new(100, 100),
+            composition: None,
+            options: TextInputOptions::default(),
         }
     }
 
@@ -307,6 +321,97 @@ mod tests {
         assert_eq!(mirror.text, "a世界c");
         assert_eq!(utf16_to_byte("a🐻b", 2), 1);
         assert_eq!(byte_to_utf16("a🐻b", 5), Some(3));
+    }
+
+    #[test]
+    fn rapid_native_snapshots_chain_from_the_latest_mirror() {
+        let mut mirror = mirror("a");
+        let first = apply_native_snapshot(
+            &mut mirror,
+            NativeTextSnapshot {
+                id: 7,
+                generation: 3,
+                document_start: 100,
+                text: "ab".into(),
+                selection_start_utf16: 2,
+                selection_end_utf16: 2,
+                composition_start_utf16: -1,
+                composition_end_utf16: -1,
+            },
+        )
+        .unwrap();
+        assert_eq!(first.splice, Some(TextSplice {
+            range: 101..101,
+            replacement: "b".into(),
+        }));
+
+        let second = apply_native_snapshot(
+            &mut mirror,
+            NativeTextSnapshot {
+                id: 7,
+                generation: 3,
+                document_start: 100,
+                text: "abc".into(),
+                selection_start_utf16: 3,
+                selection_end_utf16: 3,
+                composition_start_utf16: -1,
+                composition_end_utf16: -1,
+            },
+        )
+        .unwrap();
+        assert_eq!(second.splice, Some(TextSplice {
+            range: 102..102,
+            replacement: "c".into(),
+        }));
+        assert_eq!(mirror.text, "abc");
+    }
+
+    #[test]
+    fn duplicate_native_snapshots_are_dropped() {
+        let mut mirror = mirror("hello");
+        assert!(apply_native_snapshot(
+            &mut mirror,
+            NativeTextSnapshot {
+                id: 7,
+                generation: 3,
+                document_start: 100,
+                text: "hello".into(),
+                selection_start_utf16: 0,
+                selection_end_utf16: 0,
+                composition_start_utf16: -1,
+                composition_end_utf16: -1,
+            },
+        )
+        .is_none());
+
+        assert!(apply_native_snapshot(
+            &mut mirror,
+            NativeTextSnapshot {
+                id: 7,
+                generation: 3,
+                document_start: 100,
+                text: "hello".into(),
+                selection_start_utf16: 2,
+                selection_end_utf16: 2,
+                composition_start_utf16: 1,
+                composition_end_utf16: 3,
+            },
+        )
+        .is_some());
+        assert!(apply_native_snapshot(
+            &mut mirror,
+            NativeTextSnapshot {
+                id: 7,
+                generation: 3,
+                document_start: 100,
+                text: "hello".into(),
+                selection_start_utf16: 2,
+                selection_end_utf16: 2,
+                composition_start_utf16: 1,
+                composition_end_utf16: 3,
+            },
+        )
+        .is_none());
     }
 
     #[test]

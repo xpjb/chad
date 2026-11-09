@@ -150,23 +150,23 @@ impl Ctx {
             .map_err(|_| "text input document offset exceeds Android range")?;
         if let Ok(mut guard) = NATIVE_RUNTIME.lock() {
             let runtime = guard.as_mut().ok_or("Android text input is not initialized")?;
-            match runtime.mirror.as_mut() {
+            if !matches!(
+                runtime.mirror.as_ref(),
                 Some(mirror)
                     if mirror.id == state.id
                         && mirror.generation == state.generation
-                        && mirror.document_start == state.document_start =>
-                {
-                    if mirror.text != state.text {
-                        mirror.text.clear();
-                        mirror.text.push_str(state.text);
-                    }
-                }
-                _ => runtime.mirror = Some(TextMirror {
+                        && mirror.document_start == state.document_start
+                        && mirror.options == state.options
+            ) {
+                runtime.mirror = Some(TextMirror {
                     id: state.id,
                     generation: state.generation,
                     document_start: state.document_start,
                     text: state.text.to_string(),
-                }),
+                    selection: state.selection,
+                    composition: None,
+                    options: state.options,
+                });
             }
         } else {
             return Err("Android text input state is unavailable".into());

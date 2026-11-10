@@ -216,6 +216,11 @@ public class ChadActivity extends NativeActivity {
         runOnUiThread(() -> moveTaskToBack(true));
     }
 
+    public void chadSelectionHaptic() {
+        runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(
+            android.view.HapticFeedbackConstants.LONG_PRESS));
+    }
+
     public void chadShowTextMenu() {
         runOnUiThread(() -> {
             final MirrorInput target = input;

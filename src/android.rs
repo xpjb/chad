@@ -230,6 +230,10 @@ impl Ctx {
         self.java(jni::jni_str!("chadShowTextMenu"))
     }
 
+    pub fn selection_haptic(&self) -> Result<(), String> {
+        self.java(jni::jni_str!("chadSelectionHaptic"))
+    }
+
     /// Return from the Android runner. NativeActivity then finishes the activity.
     pub fn exit(&mut self) {
         self.exit = true;

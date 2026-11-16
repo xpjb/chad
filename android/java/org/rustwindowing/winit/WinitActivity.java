@@ -45,7 +45,7 @@ public class WinitActivity extends Activity
         surfaceView.setFocusableInTouchMode(true);
         setContentView(surfaceView);
 
-        nativeHandle = WinitNative.nativeCreate(this);
+        nativeHandle = WinitNative.nativeCreate(this, getFilesDir().getAbsolutePath());
         surfaceView.setNativeHandle(nativeHandle);
         surfaceView.getHolder().addCallback(this);
         installInsetsListener();

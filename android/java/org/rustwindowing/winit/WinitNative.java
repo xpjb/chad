@@ -11,7 +11,7 @@ final class WinitNative {
 
     private WinitNative() {}
 
-    static native long nativeCreate(Activity activity);
+    static native long nativeCreate(Activity activity, String filesDir);
     static native void nativeDestroy(long handle);
     static native void nativeStart(long handle);
     static native void nativeStop(long handle);

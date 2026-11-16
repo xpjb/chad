@@ -4,6 +4,7 @@
 //! `android_main`. The application model, WGPU rendering, pointer dispatch, Back handling, and
 //! synchronous text client all run serially on Android's UI thread.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,7 +15,9 @@ use crate::{
 use winit::application::{ApplicationHandler, BackResponse};
 use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::platform::android::java_activity::WindowExtJavaActivity;
+use winit::platform::android::java_activity::{
+    ActiveEventLoopExtJavaActivity, WindowExtJavaActivity,
+};
 use winit::text_input::{
     TextInputRequest, TextInputResponse, TextInputSessionId,
 };
@@ -259,6 +262,10 @@ impl RenderContext for Ctx {
 
 /// Application callbacks are serialized on Android's Java UI thread.
 pub trait App: Sized {
+    /// Called once with the Activity's private persistent files directory, before GPU setup.
+    fn configure(_files_dir: &Path) -> Result<(), String> {
+        Ok(())
+    }
     fn init(ctx: &mut Ctx) -> Result<Self, String>;
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent);
     fn mobile_event(&mut self, _ctx: &mut Ctx, _event: MobileEvent) {}
@@ -287,6 +294,7 @@ pub trait App: Sized {
 /// Winit application handler used by [`android_activity_entry!`](crate::android_activity_entry).
 pub struct Runner<G> {
     config: Config,
+    configured: bool,
     state: Option<State<G>>,
     error: Option<String>,
 }
@@ -298,7 +306,7 @@ impl<G> Runner<G> {
                 .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
         )
         .try_init();
-        Self { config, state: None, error: None }
+        Self { config, configured: false, state: None, error: None }
     }
 
     fn fail(&mut self, event_loop: &dyn ActiveEventLoop, error: String) {
@@ -370,6 +378,14 @@ impl<G: App> State<G> {
 
 impl<G: App + 'static> ApplicationHandler for Runner<G> {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if !self.configured {
+            if let Err(error) = G::configure(event_loop.files_dir()) {
+                self.fail(event_loop, format!("Android app configuration: {error}"));
+                return;
+            }
+            self.configured = true;
+        }
+
         if let Some(state) = &mut self.state {
             if state.surface.is_some() {
                 return;

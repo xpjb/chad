@@ -300,9 +300,12 @@ public class WinitActivity extends Activity
     @Override
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
-        if (nativeHandle != 0 && WinitNative.nativeBack(nativeHandle)) {
+        if (nativeHandle != 0) {
+            boolean handled = WinitNative.nativeBack(nativeHandle);
             afterNativeCall();
-            return;
+            if (handled) {
+                return;
+            }
         }
         super.onBackPressed();
     }
@@ -356,7 +359,12 @@ public class WinitActivity extends Activity
                 outAttrs.initialSelStart = (int) state[2];
                 outAttrs.initialSelEnd = (int) state[3];
             }
-            return new WinitInputConnection(activity, this, nativeHandle, textSession);
+            return new WinitInputConnection(
+                    activity,
+                    this,
+                    nativeHandle,
+                    textSession,
+                    (inputType & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0);
         }
 
         @Override

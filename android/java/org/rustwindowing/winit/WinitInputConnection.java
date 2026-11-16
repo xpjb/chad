@@ -16,17 +16,23 @@ final class WinitInputConnection extends BaseInputConnection {
     private final View view;
     private final long nativeHandle;
     private final long sessionId;
+    private final boolean multiline;
     private int batchDepth;
     private boolean closed;
     private TextState cachedState;
 
     WinitInputConnection(
-            WinitActivity activity, View view, long nativeHandle, long sessionId) {
+            WinitActivity activity,
+            View view,
+            long nativeHandle,
+            long sessionId,
+            boolean multiline) {
         super(view, true);
         this.activity = activity;
         this.view = view;
         this.nativeHandle = nativeHandle;
         this.sessionId = sessionId;
+        this.multiline = multiline;
     }
 
     @Override
@@ -78,7 +84,7 @@ final class WinitInputConnection extends BaseInputConnection {
         extracted.partialEndOffset = -1;
         extracted.selectionStart = state.anchor;
         extracted.selectionEnd = state.focus;
-        extracted.flags = ExtractedText.FLAG_SINGLE_LINE;
+        extracted.flags = multiline ? 0 : ExtractedText.FLAG_SINGLE_LINE;
         return extracted;
     }
 

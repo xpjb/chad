@@ -21,6 +21,7 @@ import java.lang.reflect.Field;
 public final class InputBridgeTest extends Instrumentation {
     private static native int reports();
     private static native int touches();
+    private static native int velocityReports();
 
     private ChadActivity activity;
     private EditText input;
@@ -84,6 +85,7 @@ public final class InputBridgeTest extends Instrumentation {
             shownMenu.recycle();
 
             int beforeTouches = touches();
+            int beforeVelocities = velocityReports();
             long now = SystemClock.uptimeMillis();
             float touchY = activity.getResources().getDisplayMetrics().heightPixels - 200;
             MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 60, touchY, 0);
@@ -97,6 +99,8 @@ public final class InputBridgeTest extends Instrumentation {
             SystemClock.sleep(150);
             check(touches() >= beforeTouches + 2,
                 "Toolbar swallowed the first underlying handle gesture");
+            check(velocityReports() == beforeVelocities + 1,
+                "Activity did not report platform touch velocity");
 
             runOnMainSync(() -> menu.getMenu().performIdentifierAction(android.R.id.copy, 0));
             runOnMainSync(() -> {
@@ -178,7 +182,7 @@ public final class InputBridgeTest extends Instrumentation {
             });
 
             result.putString("stream",
-                "PASS: toolbar, stale-generation fence, batch commits and same-generation IME ownership\n");
+                "PASS: toolbar, touch velocity, stale-generation fence, batch commits and same-generation IME ownership\n");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("stream", "FAIL: " + android.util.Log.getStackTraceString(error));

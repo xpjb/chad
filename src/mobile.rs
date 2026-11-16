@@ -77,9 +77,19 @@ pub struct MobileViewport {
     pub keyboard_visible: bool,
 }
 
+/// Velocity reported by Android's native touch tracker when a pointer is lifted.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TouchVelocity {
+    pub id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub minimum: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MobileEvent {
     TextInput(TextInputEvent),
+    TouchVelocity(TouchVelocity),
     ViewportChanged(MobileViewport),
 }
 

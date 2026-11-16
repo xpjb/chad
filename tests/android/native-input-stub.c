@@ -10,6 +10,7 @@
 static atomic_int running;
 static atomic_int motions;
 static atomic_int text_reports;
+static atomic_int velocity_reports;
 static pthread_t reader;
 
 static void *read_input(void *queue) {
@@ -67,6 +68,16 @@ JNIEXPORT jint JNICALL Java_io_github_xpjb_chad_test_InputBridgeTest_reports(
 JNIEXPORT jint JNICALL Java_io_github_xpjb_chad_test_InputBridgeTest_touches(
     JNIEnv *env, jclass type) {
     return atomic_load(&motions);
+}
+
+JNIEXPORT jint JNICALL Java_io_github_xpjb_chad_test_InputBridgeTest_velocityReports(
+    JNIEnv *env, jclass type) {
+    return atomic_load(&velocity_reports);
+}
+
+JNIEXPORT void JNICALL Java_io_github_xpjb_chad_ChadActivity_nativeTouchVelocity(
+    JNIEnv *env, jclass type, jlong id, jfloat x, jfloat y, jfloat minimum) {
+    atomic_fetch_add(&velocity_reports, 1);
 }
 
 JNIEXPORT void JNICALL Java_io_github_xpjb_chad_ChadActivity_nativeViewport(

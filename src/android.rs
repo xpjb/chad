@@ -6,13 +6,13 @@
 
 use crate::{
     MobileEvent, MobileViewport, NativeTextSnapshot, PhysicalRect, RenderContext, TextInputState,
-    TextMirror, apply_native_snapshot, byte_to_utf16, wgpu,
+    TextMirror, TouchVelocity, apply_native_snapshot, byte_to_utf16, wgpu,
 };
 use jni::{
     EnvUnowned, JavaVM,
     errors::ThrowRuntimeExAndDefault,
     objects::{JClass, JObject, JString, JValue},
-    sys::{jboolean, jint, jlong},
+    sys::{jboolean, jfloat, jint, jlong},
 };
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
@@ -26,6 +26,7 @@ pub use winit::platform::android::activity::AndroidApp;
 
 enum NativeEvent {
     TextInput(crate::TextInputEvent),
+    TouchVelocity(TouchVelocity),
     Viewport(NativeViewport),
 }
 
@@ -344,6 +345,7 @@ impl<G: App> State<G> {
         for event in events {
             let event = match event {
                 NativeEvent::TextInput(event) => MobileEvent::TextInput(event),
+                NativeEvent::TouchVelocity(event) => MobileEvent::TouchVelocity(event),
                 NativeEvent::Viewport(viewport) => {
                     let (width, height) = self.ctx.size;
                     let content = self.ctx.app.content_rect();
@@ -732,6 +734,35 @@ pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeTextInput(
                 runtime.events.push(NativeEvent::TextInput(event));
                 wake_native(runtime);
             }
+        }
+        Ok::<_, jni::errors::Error>(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeTouchVelocity(
+    mut env: EnvUnowned,
+    _: JClass,
+    id: jlong,
+    x: jfloat,
+    y: jfloat,
+    minimum: jfloat,
+) {
+    env.with_env(|_| {
+        if id < 0 || !x.is_finite() || !y.is_finite() || !minimum.is_finite() {
+            return Ok(());
+        }
+        if let Ok(mut guard) = NATIVE_RUNTIME.lock()
+            && let Some(runtime) = guard.as_mut()
+        {
+            runtime.events.push(NativeEvent::TouchVelocity(TouchVelocity {
+                id: id as u64,
+                x,
+                y,
+                minimum: minimum.max(0.0),
+            }));
+            wake_native(runtime);
         }
         Ok::<_, jni::errors::Error>(())
     })

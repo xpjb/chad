@@ -47,5 +47,5 @@ PY
 "$sdk/platform-tools/adb" install -r "$out/signed.apk"
 timeout 60 "$sdk/platform-tools/adb" shell am instrument -w \
     io.github.xpjb.chad.inputtest/io.github.xpjb.chad.test.InputBridgeTest | tee "$out/result"
-grep -q 'PASS: toolbar, stale-generation fence, batch commits and same-generation IME ownership' \
+grep -q 'PASS: toolbar, touch velocity, stale-generation fence, batch commits and same-generation IME ownership' \
     "$out/result"

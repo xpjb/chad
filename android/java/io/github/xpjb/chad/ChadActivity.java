@@ -11,7 +11,10 @@ import android.view.ActionMode;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsAnimation;
@@ -34,6 +37,7 @@ public class ChadActivity extends NativeActivity {
         int compositionStart, int compositionEnd);
     private static native void nativeViewport(int left, int top, int right, int bottom,
         boolean keyboardVisible);
+    private static native void nativeTouchVelocity(long id, float x, float y, float minimum);
 
     private MirrorInput input;
     private ActionMode inputMenu;
@@ -41,6 +45,8 @@ public class ChadActivity extends NativeActivity {
     private final android.graphics.Rect lastViewport = new android.graphics.Rect();
     private boolean lastKeyboardVisible;
     private boolean imeAnimating;
+    private VelocityTracker touchVelocity;
+    private int touchPointer = -1;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -89,6 +95,36 @@ public class ChadActivity extends NativeActivity {
             if (!imeAnimating) reportViewport();
         });
         decor.post(this::reportViewport);
+    }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            recycleTouchVelocity();
+            touchVelocity = VelocityTracker.obtain();
+            touchPointer = event.getPointerId(event.getActionIndex());
+        }
+        if (touchVelocity != null) touchVelocity.addMovement(event);
+        if (action == MotionEvent.ACTION_UP && touchVelocity != null) {
+            ViewConfiguration configuration = ViewConfiguration.get(this);
+            touchVelocity.computeCurrentVelocity(
+                1000, configuration.getScaledMaximumFlingVelocity());
+            final long id = touchPointer;
+            final float x = touchVelocity.getXVelocity(touchPointer);
+            final float y = touchVelocity.getYVelocity(touchPointer);
+            final float minimum = configuration.getScaledMinimumFlingVelocity();
+            recycleTouchVelocity();
+            getWindow().getDecorView().post(() -> nativeTouchVelocity(id, x, y, minimum));
+        } else if (action == MotionEvent.ACTION_CANCEL) {
+            recycleTouchVelocity();
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    private void recycleTouchVelocity() {
+        if (touchVelocity != null) touchVelocity.recycle();
+        touchVelocity = null;
+        touchPointer = -1;
     }
 
     private InputMethodManager keyboard() {

@@ -4,6 +4,9 @@
 //! `android_main`. The application model, WGPU rendering, pointer dispatch, Back handling, and
 //! synchronous text client all run serially on Android's UI thread.
 
+#[doc(hidden)]
+pub use winit_android_support as __winit_android;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,7 +18,7 @@ use crate::{
 use winit::application::{ApplicationHandler, BackResponse};
 use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::platform::android::java_activity::{
+use winit_android_support::java_activity::{
     ActiveEventLoopExtJavaActivity, WindowExtJavaActivity,
 };
 use winit::text_input::{
@@ -681,7 +684,7 @@ impl<G: App + 'static> ApplicationHandler for Runner<G> {
 #[macro_export]
 macro_rules! android_activity_entry {
     ($app:ty, $config:expr) => {
-        $crate::winit::platform::android::java_activity_entry!(
+        $crate::android::__winit_android::java_activity_entry!(
             $crate::android::Runner<$app>,
             $crate::android::Runner::<$app>::new($config)
         );

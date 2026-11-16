@@ -17,7 +17,16 @@ pub use wgpu;
 #[cfg(not(target_os = "android"))]
 pub use winit;
 #[cfg(target_os = "android")]
-pub use winit_android_support as winit;
+pub mod winit {
+    pub use winit_core_android_support::{
+        application, cursor, data_transfer, error, event, event_loop, icon, keyboard, monitor,
+        text_input, window,
+    };
+
+    pub mod dpi {
+        pub use dpi_android_support::*;
+    }
+}
 
 mod mobile;
 pub use mobile::*;

@@ -5,15 +5,19 @@
 //! Window-independent rendering can target [`RenderContext`]; native tools can
 //! render through an owning [`HeadlessCtx`] without a window or event loop.
 //!
-//! Pins **winit 0.30** and **wgpu 30**, re-exported as [`chad::winit`](winit)
-//! and [`chad::wgpu`](wgpu) — write your code against those, don't add your own.
+//! Pins **winit 0.30** on desktop/web, the experimental current-git Android fork on Android,
+//! and **wgpu 30**. They are re-exported as [`chad::winit`](winit) and
+//! [`chad::wgpu`](wgpu) — write your code against those, don't add your own.
 //!
 //! Scope rule: something belongs in this crate only if implementing it
 //! correctly requires touching the event loop, window, or surface lifecycle —
 //! or if it is identical in every game. Everything else is userland.
 
 pub use wgpu;
+#[cfg(not(target_os = "android"))]
 pub use winit;
+#[cfg(target_os = "android")]
+pub use winit_android_support as winit;
 
 mod mobile;
 pub use mobile::*;

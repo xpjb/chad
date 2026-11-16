@@ -2,7 +2,7 @@
 name = "chad"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 description = "Thin platform layer for games: owns the winit event loop, window, wgpu init, surface lifecycle, and frame timing; exposes winit and wgpu raw."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xpjb/chad"
@@ -13,7 +13,6 @@ exclude = ["/.github", "/gallery", "/scripts"]
 
 [dependencies]
 # Re-exported as chad::winit / chad::wgpu; their majors are chad's public API.
-winit = "0.30"
 wgpu = "30"
 log = "0.4"
 web-time = "1"
@@ -22,9 +21,11 @@ web-time = "1"
 pollster = "0.4"
 env_logger = "0.11"
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+winit = "0.30"
+
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.22"
-winit = { version = "0.30", features = ["android-native-activity"] }
+winit_android_support = { package = "winit", git = "https://github.com/xpjb/winit-android-support.git", rev = "53a03b800f4c47e88112dfc50823647811b72685", default-features = false, features = ["android-java-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

@@ -1,58 +1,26 @@
-//! NativeActivity/Vulkan runner, separate from the desktop/web runner.
+//! Experimental Android runner driven by a regular Java `Activity` UI Looper.
 //!
-//! Call [`run`] from `android_main`. The game and GPU survive surface suspension;
-//! the drawing surface is released before the suspend callback returns. Process
-//! death still ends the game: durable saves and game-time policy belong to the app.
+//! Use [`android_activity_entry!`](crate::android_activity_entry) instead of exporting
+//! `android_main`. The application model, WGPU rendering, pointer dispatch, Back handling, and
+//! synchronous text client all run serially on Android's UI thread.
+
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::{
-    MobileEvent, MobileViewport, NativeTextSnapshot, PhysicalRect, RenderContext, TextInputState,
-    TextMirror, TouchVelocity, apply_native_snapshot, byte_to_utf16, wgpu,
+    MobileEvent, MobileViewport, PhysicalRect, RenderContext, TextInputOptions, TextInputState,
+    wgpu, winit,
 };
-use jni::{
-    EnvUnowned, JavaVM,
-    errors::ThrowRuntimeExAndDefault,
-    objects::{JClass, JObject, JString, JValue},
-    sys::{jboolean, jfloat, jint, jlong},
-};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Instant;
-use winit::application::ApplicationHandler;
+use winit::application::{ApplicationHandler, BackResponse};
 use winit::event::{DeviceEvent, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::platform::android::EventLoopBuilderExtAndroid;
-use winit::window::Window;
-
-pub use winit::platform::android::activity::AndroidApp;
-
-enum NativeEvent {
-    TextInput(crate::TextInputEvent),
-    TouchVelocity(TouchVelocity),
-    Viewport(NativeViewport),
-}
-
-#[derive(Clone, Copy)]
-struct NativeViewport {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-    keyboard_visible: bool,
-}
-
-struct NativeRuntime {
-    window: Weak<Window>,
-    events: Vec<NativeEvent>,
-    mirror: Option<TextMirror>,
-}
-
-static NATIVE_RUNTIME: Mutex<Option<NativeRuntime>> = Mutex::new(None);
-static PENDING_VIEWPORT: Mutex<Option<NativeViewport>> = Mutex::new(None);
-
-fn wake_native(runtime: &NativeRuntime) {
-    if let Some(window) = runtime.window.upgrade() {
-        window.request_redraw();
-    }
-}
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
+use winit::platform::android::java_activity::WindowExtJavaActivity;
+use winit::text_input::{
+    TextInputRequest, TextInputResponse, TextInputSessionId,
+};
+use winit::window::{
+    ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequest, ImeRequestData, Window,
+};
 
 /// GPU requirements and presentation policy. Android owns the window size.
 pub struct Config {
@@ -60,7 +28,7 @@ pub struct Config {
     pub device_limits: wgpu::Limits,
     pub present_mode: wgpu::PresentMode,
     pub desired_maximum_frame_latency: u32,
-    /// Continuous for games; OnDemand redraws on input or window.request_redraw().
+    /// Continuous for games; OnDemand redraws on input or `window.request_redraw()`.
     pub redraw: crate::RedrawMode,
 }
 
@@ -76,21 +44,29 @@ impl Default for Config {
     }
 }
 
-/// GPU and input context. The runner owns the separate, temporary surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ActiveTextInput {
+    id: u64,
+    options: TextInputOptions,
+    field_rect: PhysicalRect,
+    caret_rect: PhysicalRect,
+    enabled: bool,
+}
+
+/// GPU and input context. The Android Activity owns the event loop and surface lifecycle.
 pub struct Ctx {
-    pub app: AndroidApp,
-    /// The native surface behind this window is unavailable while suspended.
-    pub window: Arc<Window>,
+    pub window: Arc<dyn Window>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub surface_format: wgpu::TextureFormat,
-    /// Real seconds since the previous update, reset on resume and focus changes.
+    /// Real seconds since the previous update, reset on surface recreation and focus changes.
     pub dt: f32,
     /// Wall-clock seconds since GPU initialization; includes suspended time.
     pub elapsed: f32,
     pub frame_index: u64,
     pub focused: bool,
     mobile_viewport: MobileViewport,
+    text_input: Option<ActiveTextInput>,
     size: (u32, u32),
     exit: bool,
 }
@@ -113,211 +89,223 @@ impl Ctx {
         self.window.request_redraw();
     }
 
-    fn java(&self, method: &jni::strings::JNIStr) -> Result<(), String> {
-        let vm = unsafe { JavaVM::from_raw(self.app.vm_as_ptr().cast()) };
-        vm.attach_current_thread(|env| {
-            let activity = unsafe { JObject::from_raw(env, self.app.activity_as_ptr().cast()) };
-            env.call_method(&activity, method, jni::jni_sig!("()V"), &[])?;
-            Ok::<_, jni::errors::Error>(())
-        })
-        .map_err(|error| format!("Android activity method: {error}"))
-    }
-
+    /// Configures the focused text session. The supplied text window is no longer mirrored into
+    /// Java; synchronous [`App::text_input_request`] callbacks are the document source of truth.
+    /// `generation`, `document_start`, `text`, and `selection` remain in this transitional
+    /// signature only so applications can migrate without changing focus plumbing first.
     pub fn set_text_input(&mut self, state: TextInputState<'_>) -> Result<(), String> {
         if state.id == 0 {
             return Err("text input ID must be nonzero".into());
         }
-        let end = state
-            .document_start
-            .checked_add(state.text.len())
-            .ok_or("text input document range overflow")?;
-        if state.selection.anchor < state.document_start
-            || state.selection.anchor > end
-            || state.selection.focus < state.document_start
-            || state.selection.focus > end
-        {
-            return Err("text input selection is outside its surrounding text".into());
-        }
-        let local_anchor = state.selection.anchor - state.document_start;
-        let local_focus = state.selection.focus - state.document_start;
-        let anchor = byte_to_utf16(state.text, local_anchor)
-            .ok_or("text input anchor is not a UTF-8 boundary")?;
-        let focus = byte_to_utf16(state.text, local_focus)
-            .ok_or("text input focus is not a UTF-8 boundary")?;
-        let id = i64::try_from(state.id).map_err(|_| "text input ID exceeds Android range")?;
-        let generation = i64::try_from(state.generation)
-            .map_err(|_| "text input generation exceeds Android range")?;
-        let document_start = i64::try_from(state.document_start)
-            .map_err(|_| "text input document offset exceeds Android range")?;
-        if let Ok(mut guard) = NATIVE_RUNTIME.lock() {
-            let runtime = guard.as_mut().ok_or("Android text input is not initialized")?;
-            if !matches!(
-                runtime.mirror.as_ref(),
-                Some(mirror)
-                    if mirror.id == state.id
-                        && mirror.generation == state.generation
-                        && mirror.document_start == state.document_start
-                        && mirror.options == state.options
-            ) {
-                runtime.mirror = Some(TextMirror {
-                    id: state.id,
-                    generation: state.generation,
-                    document_start: state.document_start,
-                    text: state.text.to_string(),
-                    selection: state.selection,
-                    composition: None,
-                    options: state.options,
-                });
+        let next = ActiveTextInput {
+            id: state.id,
+            options: state.options,
+            field_rect: state.field_rect,
+            caret_rect: state.caret_rect,
+            enabled: true,
+        };
+        let previous = self.text_input;
+        if previous.map(|input| input.id) != Some(state.id) {
+            if previous.is_some_and(|input| input.enabled) {
+                self.window
+                    .request_ime_update(ImeRequest::Disable)
+                    .map_err(|error| format!("disable previous Android text input: {error}"))?;
             }
-        } else {
-            return Err("Android text input state is unavailable".into());
+            self.window
+                .as_ref()
+                .set_text_input_session(TextInputSessionId::from_raw(state.id));
+            self.enable_text_input(next)?;
+        } else if previous != Some(next) {
+            self.update_text_input(next)?;
         }
-
-        let vm = unsafe { JavaVM::from_raw(self.app.vm_as_ptr().cast()) };
-        vm.attach_current_thread(|env| {
-            let text = env.new_string(state.text)?;
-            let arguments = [
-                JValue::Long(id),
-                JValue::Long(generation),
-                JValue::Long(document_start),
-                JValue::Object(&text),
-                JValue::Int(anchor),
-                JValue::Int(focus),
-                JValue::Float(state.field_rect.x),
-                JValue::Float(state.field_rect.y),
-                JValue::Float(state.field_rect.width),
-                JValue::Float(state.field_rect.height),
-                JValue::Float(state.caret_rect.x),
-                JValue::Float(state.caret_rect.y),
-                JValue::Float(state.caret_rect.width),
-                JValue::Float(state.caret_rect.height),
-                JValue::Bool(state.options.multiline),
-                JValue::Bool(state.options.secure),
-            ];
-            let activity = unsafe { JObject::from_raw(env, self.app.activity_as_ptr().cast()) };
-            env.call_method(
-                &activity,
-                jni::jni_str!("chadSetTextInput"),
-                jni::jni_sig!("(JJJLjava/lang/String;IIFFFFFFFFZZ)V"),
-                &arguments,
-            )?;
-            Ok::<_, jni::errors::Error>(())
-        })
-        .map_err(|error| format!("Android text input: {error}"))
+        self.text_input = Some(next);
+        Ok(())
     }
 
     pub fn clear_text_input(&mut self) -> Result<(), String> {
-        if let Ok(mut guard) = NATIVE_RUNTIME.lock()
-            && let Some(runtime) = guard.as_mut()
-        {
-            runtime.mirror = None;
+        if self.text_input.is_some_and(|input| input.enabled) {
+            self.window
+                .request_ime_update(ImeRequest::Disable)
+                .map_err(|error| format!("disable Android text input: {error}"))?;
         }
-        self.java(jni::jni_str!("chadClearTextInput"))
+        self.text_input = None;
+        Ok(())
     }
 
-    pub fn show_keyboard(&self) -> Result<(), String> {
-        self.java(jni::jni_str!("chadShowKeyboard"))
+    pub fn show_keyboard(&mut self) -> Result<(), String> {
+        let Some(mut input) = self.text_input else {
+            return Err("no Android text input session is configured".into());
+        };
+        if !input.enabled {
+            input.enabled = true;
+            self.window
+                .as_ref()
+                .set_text_input_session(TextInputSessionId::from_raw(input.id));
+            self.enable_text_input(input)?;
+            self.text_input = Some(input);
+        }
+        Ok(())
     }
 
-    pub fn hide_keyboard(&self) -> Result<(), String> {
-        self.java(jni::jni_str!("chadHideKeyboard"))
+    pub fn hide_keyboard(&mut self) -> Result<(), String> {
+        let Some(mut input) = self.text_input else {
+            return Ok(());
+        };
+        if input.enabled {
+            self.window
+                .request_ime_update(ImeRequest::Disable)
+                .map_err(|error| format!("hide Android keyboard: {error}"))?;
+            input.enabled = false;
+            self.text_input = Some(input);
+        }
+        Ok(())
     }
 
-    pub fn move_task_to_back(&self) -> Result<(), String> {
-        self.java(jni::jni_str!("chadMoveTaskToBack"))
+    pub fn move_task_to_back(&mut self) -> Result<(), String> {
+        Err("move_task_to_back is not implemented by the Java-loop experiment".into())
     }
 
     pub fn show_text_menu(&self) -> Result<(), String> {
-        self.java(jni::jni_str!("chadShowTextMenu"))
+        Err("native Android text menus are not implemented by the Java-loop experiment".into())
     }
 
     pub fn selection_haptic(&self) -> Result<(), String> {
-        self.java(jni::jni_str!("chadSelectionHaptic"))
+        Err("Android selection haptics are not implemented by the Java-loop experiment".into())
     }
 
-    /// Return from the Android runner. NativeActivity then finishes the activity.
+    /// Finish the Activity after the current callback returns.
     pub fn exit(&mut self) {
         self.exit = true;
     }
+
+    fn enable_text_input(&self, input: ActiveTextInput) -> Result<(), String> {
+        let capabilities = ImeCapabilities::new()
+            .with_hint_and_purpose()
+            .with_cursor_area();
+        let data = ime_data(input);
+        let request = ImeEnableRequest::new(capabilities, data)
+            .ok_or("invalid Android IME enable request")?;
+        self.window
+            .request_ime_update(ImeRequest::Enable(request))
+            .map_err(|error| format!("enable Android text input: {error}"))
+    }
+
+    fn update_text_input(&self, input: ActiveTextInput) -> Result<(), String> {
+        if !input.enabled {
+            return Ok(());
+        }
+        self.window
+            .request_ime_update(ImeRequest::Update(ime_data(input)))
+            .map_err(|error| format!("update Android text input: {error}"))
+    }
+}
+
+fn ime_data(input: ActiveTextInput) -> ImeRequestData {
+    let mut hint = ImeHint::COMPLETION | ImeHint::SPELLCHECK;
+    let purpose = if input.options.secure {
+        hint |= ImeHint::HIDDEN_TEXT | ImeHint::SENSITIVE_DATA;
+        ImePurpose::Password
+    } else {
+        ImePurpose::Normal
+    };
+    if input.options.multiline {
+        hint |= ImeHint::MULTILINE;
+    }
+    ImeRequestData::default()
+        .with_hint_and_purpose(hint, purpose)
+        .with_cursor_area(
+            winit::dpi::PhysicalPosition::new(input.caret_rect.x, input.caret_rect.y).into(),
+            winit::dpi::PhysicalSize::new(
+                input.caret_rect.width.max(1.0),
+                input.caret_rect.height.max(1.0),
+            )
+            .into(),
+        )
 }
 
 impl RenderContext for Ctx {
     fn device(&self) -> &wgpu::Device {
         &self.device
     }
+
     fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
+
     fn format(&self) -> wgpu::TextureFormat {
         self.surface_format
     }
+
     fn size(&self) -> (u32, u32) {
         self.size
     }
+
     fn dt(&self) -> f32 {
         self.dt
     }
+
     fn elapsed(&self) -> f32 {
         self.elapsed
     }
+
     fn frame_index(&self) -> u64 {
         self.frame_index
     }
+
     fn alpha(&self) -> f32 {
         1.0
     }
 }
 
-/// Callbacks run on the NativeActivity `android_main` thread, not Java's UI thread.
+/// Application callbacks are serialized on Android's Java UI thread.
 pub trait App: Sized {
-    /// Called once for this runner, after the first surface and GPU are ready.
     fn init(ctx: &mut Ctx) -> Result<Self, String>;
     fn event(&mut self, ctx: &mut Ctx, event: &WindowEvent);
     fn mobile_event(&mut self, _ctx: &mut Ctx, _event: MobileEvent) {}
     fn device_event(&mut self, _ctx: &mut Ctx, _event: &DeviceEvent) {}
-    /// Called after init and whenever a suspended surface has been recreated.
+    /// Called after init and whenever a destroyed Android surface has been recreated.
     fn resumed(&mut self, _ctx: &mut Ctx) {}
-    /// The surface has already been released. Use this to cancel input or save.
+    /// Called after the WGPU surface has been dropped and before Android releases its Surface.
     fn suspended(&mut self, _ctx: &mut Ctx) {}
-    /// One variable-step update per redraw, only while a surface exists.
+    /// Synchronously services the focused Android `InputConnection`.
+    fn text_input_request(
+        &mut self,
+        _ctx: &mut Ctx,
+        _session_id: TextInputSessionId,
+        _request: TextInputRequest,
+    ) -> TextInputResponse {
+        TextInputResponse::Unsupported
+    }
+    /// Return `true` to consume Android Back.
+    fn back_requested(&mut self, _ctx: &mut Ctx) -> bool {
+        false
+    }
     fn update(&mut self, ctx: &mut Ctx);
     fn frame(&mut self, ctx: &mut Ctx, view: &wgpu::TextureView);
 }
 
-/// Run a single NativeActivity. Android's glue forwards stdout/stderr to logcat.
-pub fn run<G: App + 'static>(app: AndroidApp, config: Config) -> Result<(), String> {
-    let _ = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .try_init();
-    let event_loop = EventLoop::builder()
-        .with_android_app(app.clone())
-        .build()
-        .map_err(|error| format!("Android event loop: {error}"))?;
-    let mut runner = Runner::<G> {
-        app,
-        config,
-        state: None,
-        error: None,
-    };
-    let result = event_loop
-        .run_app(&mut runner)
-        .map_err(|error| format!("Android event loop: {error}"));
-    if let Ok(mut runtime) = NATIVE_RUNTIME.lock() {
-        *runtime = None;
-    }
-    result?;
-    match runner.error {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
-}
-
-struct Runner<G> {
-    app: AndroidApp,
+/// Winit application handler used by [`android_activity_entry!`](crate::android_activity_entry).
+pub struct Runner<G> {
     config: Config,
     state: Option<State<G>>,
     error: Option<String>,
+}
+
+impl<G> Runner<G> {
+    pub fn new(config: Config) -> Self {
+        let _ = env_logger::Builder::from_env(
+            env_logger::Env::default()
+                .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
+        )
+        .try_init();
+        Self { config, state: None, error: None }
+    }
+
+    fn fail(&mut self, event_loop: &dyn ActiveEventLoop, error: String) {
+        log::error!("{error}");
+        self.error = Some(error);
+        event_loop.exit();
+    }
 }
 
 struct State<G> {
@@ -332,56 +320,6 @@ struct State<G> {
 }
 
 impl<G: App> State<G> {
-    fn drain_native_events(&mut self) {
-        let events = NATIVE_RUNTIME
-            .lock()
-            .ok()
-            .and_then(|mut guard| {
-                guard
-                    .as_mut()
-                    .map(|runtime| std::mem::take(&mut runtime.events))
-            })
-            .unwrap_or_default();
-        for event in events {
-            let event = match event {
-                NativeEvent::TextInput(event) => MobileEvent::TextInput(event),
-                NativeEvent::TouchVelocity(event) => MobileEvent::TouchVelocity(event),
-                NativeEvent::Viewport(viewport) => {
-                    let (width, height) = self.ctx.size;
-                    let content = self.ctx.app.content_rect();
-                    let mut visible = PhysicalRect::new(0.0, 0.0, width as f32, height as f32);
-                    for (left, top, right, bottom) in [
-                        (content.left, content.top, content.right, content.bottom),
-                        (viewport.left, viewport.top, viewport.right, viewport.bottom),
-                    ] {
-                        if right > left && bottom > top {
-                            let x = visible.x.max(left.max(0) as f32);
-                            let y = visible.y.max(top.max(0) as f32);
-                            let right = (visible.x + visible.width).min(right.max(0) as f32);
-                            let bottom = (visible.y + visible.height).min(bottom.max(0) as f32);
-                            visible = PhysicalRect::new(
-                                x,
-                                y,
-                                (right - x).max(0.0),
-                                (bottom - y).max(0.0),
-                            );
-                        }
-                    }
-                    let viewport = MobileViewport {
-                        visible,
-                        keyboard_visible: viewport.keyboard_visible,
-                    };
-                    if viewport == self.ctx.mobile_viewport {
-                        continue;
-                    }
-                    self.ctx.mobile_viewport = viewport;
-                    MobileEvent::ViewportChanged(viewport)
-                }
-            };
-            self.game.mobile_event(&mut self.ctx, event);
-        }
-    }
-
     fn attach_surface(&mut self) -> Result<(), String> {
         let surface = self
             .instance
@@ -391,7 +329,7 @@ impl<G: App> State<G> {
         if !caps.formats.contains(&self.surface_config.format) {
             return Err("Android surface format changed; restart the app".into());
         }
-        let size = self.ctx.window.inner_size();
+        let size = self.ctx.window.surface_size();
         self.surface_config.width = size.width.max(1);
         self.surface_config.height = size.height.max(1);
         surface.configure(&self.ctx.device, &self.surface_config);
@@ -401,25 +339,37 @@ impl<G: App> State<G> {
         self.ctx.dt = 0.0;
         self.ctx.elapsed = (self.last - self.start).as_secs_f32();
         self.ctx.focused = self.ctx.window.has_focus();
-        log::info!(
-            "Android surface ready: {}x{}",
-            self.ctx.size.0,
-            self.ctx.size.1
-        );
+        self.refresh_mobile_viewport();
+        log::info!("Android surface ready: {}x{}", self.ctx.size.0, self.ctx.size.1);
         Ok(())
     }
-}
 
-impl<G> Runner<G> {
-    fn fail(&mut self, event_loop: &ActiveEventLoop, error: String) {
-        log::error!("{error}");
-        self.error = Some(error);
-        event_loop.exit();
+    fn refresh_mobile_viewport(&mut self) {
+        let insets = self.ctx.window.safe_area();
+        let viewport = MobileViewport {
+            visible: PhysicalRect::new(
+                insets.left as f32,
+                insets.top as f32,
+                self.ctx
+                    .size
+                    .0
+                    .saturating_sub(insets.left.saturating_add(insets.right)) as f32,
+                self.ctx
+                    .size
+                    .1
+                    .saturating_sub(insets.top.saturating_add(insets.bottom)) as f32,
+            ),
+            keyboard_visible: false,
+        };
+        if viewport != self.ctx.mobile_viewport {
+            self.ctx.mobile_viewport = viewport;
+            self.game.mobile_event(&mut self.ctx, MobileEvent::ViewportChanged(viewport));
+        }
     }
 }
 
-impl<G: App> ApplicationHandler for Runner<G> {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl<G: App + 'static> ApplicationHandler for Runner<G> {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if let Some(state) = &mut self.state {
             if state.surface.is_some() {
                 return;
@@ -438,9 +388,9 @@ impl<G: App> ApplicationHandler for Runner<G> {
         }
 
         let result = pollster::block_on(async {
-            let window = Arc::new(
+            let window: Arc<dyn Window> = Arc::from(
                 event_loop
-                    .create_window(Window::default_attributes())
+                    .create_window(winit::window::WindowAttributes::default())
                     .map_err(|error| format!("Android window: {error}"))?,
             );
             let mut descriptor = wgpu::InstanceDescriptor::new_with_display_handle_from_env(
@@ -480,7 +430,7 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 .or_else(|| caps.formats.first().copied())
                 .ok_or("Android surface has no formats")?;
             let surface_format = format.add_srgb_suffix();
-            let size = window.inner_size();
+            let size = window.surface_size();
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format,
@@ -498,7 +448,6 @@ impl<G: App> ApplicationHandler for Runner<G> {
             };
             surface.configure(&device, &surface_config);
             let mut ctx = Ctx {
-                app: self.app.clone(),
                 focused: window.has_focus(),
                 window,
                 device,
@@ -516,23 +465,11 @@ impl<G: App> ApplicationHandler for Runner<G> {
                     ),
                     keyboard_visible: false,
                 },
+                text_input: None,
                 size: (surface_config.width, surface_config.height),
                 exit: false,
             };
-            if let Ok(mut runtime) = NATIVE_RUNTIME.lock() {
-                *runtime = Some(NativeRuntime {
-                    window: Arc::downgrade(&ctx.window),
-                    events: Vec::new(),
-                    mirror: None,
-                });
-                if let Ok(mut viewport) = PENDING_VIEWPORT.lock()
-                    && let Some(viewport) = viewport.take()
-                    && let Some(runtime) = runtime.as_mut()
-                {
-                    runtime.events.push(NativeEvent::Viewport(viewport));
-                }
-            }
-            let game = G::init(&mut ctx).map_err(|error| format!("Android game init: {error}"))?;
+            let game = G::init(&mut ctx).map_err(|error| format!("Android app init: {error}"))?;
             let now = Instant::now();
             Ok::<_, String>(State {
                 game,
@@ -545,8 +482,10 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 last: now,
             })
         });
+
         match result {
             Ok(mut state) => {
+                state.refresh_mobile_viewport();
                 state.game.resumed(&mut state.ctx);
                 if state.ctx.exit {
                     event_loop.exit();
@@ -554,12 +493,12 @@ impl<G: App> ApplicationHandler for Runner<G> {
                     state.ctx.window.request_redraw();
                 }
                 self.state = Some(state);
-            }
+            },
             Err(error) => self.fail(event_loop, error),
         }
     }
 
-    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+    fn destroy_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if let Some(state) = &mut self.state {
             let Some(surface) = state.surface.take() else {
                 return;
@@ -568,7 +507,6 @@ impl<G: App> ApplicationHandler for Runner<G> {
             state.ctx.elapsed = state.start.elapsed().as_secs_f32();
             state.ctx.dt = 0.0;
             state.ctx.focused = false;
-            state.drain_native_events();
             state.game.suspended(&mut state.ctx);
             log::info!("Android surface suspended");
             if state.ctx.exit {
@@ -579,7 +517,7 @@ impl<G: App> ApplicationHandler for Runner<G> {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         _id: winit::window::WindowId,
         event: WindowEvent,
     ) {
@@ -590,21 +528,22 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 state.ctx.focused = *focused;
                 state.last = Instant::now();
                 state.ctx.dt = 0.0;
-            }
-            WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+            },
+            WindowEvent::SurfaceResized(size) if size.width > 0 && size.height > 0 => {
                 if let Some(surface) = &state.surface {
                     state.surface_config.width = size.width;
                     state.surface_config.height = size.height;
                     surface.configure(&state.ctx.device, &state.surface_config);
                     state.ctx.size = (size.width, size.height);
+                    state.refresh_mobile_viewport();
                     state.ctx.window.request_redraw();
                 }
-            }
+            },
             WindowEvent::RedrawRequested => {
                 if state.surface.is_none() {
                     return;
                 }
-                let size = state.ctx.window.inner_size();
+                let size = state.ctx.window.surface_size();
                 if size.width == 0 || size.height == 0 {
                     return;
                 }
@@ -612,7 +551,7 @@ impl<G: App> ApplicationHandler for Runner<G> {
                 state.ctx.dt = (now - state.last).as_secs_f32();
                 state.ctx.elapsed = (now - state.start).as_secs_f32();
                 state.last = now;
-                state.drain_native_events();
+                state.refresh_mobile_viewport();
                 state.game.update(&mut state.ctx);
                 if state.ctx.exit {
                     event_loop.exit();
@@ -628,7 +567,7 @@ impl<G: App> ApplicationHandler for Runner<G> {
                         surface.configure(&state.ctx.device, &state.surface_config);
                         state.ctx.size = (size.width, size.height);
                         None
-                    }
+                    },
                     wgpu::CurrentSurfaceTexture::Lost => {
                         state.surface = None;
                         if let Err(error) = state.attach_surface() {
@@ -636,13 +575,13 @@ impl<G: App> ApplicationHandler for Runner<G> {
                             return;
                         }
                         None
-                    }
+                    },
                     wgpu::CurrentSurfaceTexture::Occluded
                     | wgpu::CurrentSurfaceTexture::Timeout => None,
                     wgpu::CurrentSurfaceTexture::Validation => {
                         self.fail(event_loop, "Android surface validation failed".into());
                         return;
-                    }
+                    },
                 };
                 let frame_retry = frame.is_none();
                 if let Some(frame) = frame {
@@ -662,8 +601,8 @@ impl<G: App> ApplicationHandler for Runner<G> {
                     state.ctx.window.request_redraw();
                 }
                 return;
-            }
-            _ => {}
+            },
+            _ => {},
         }
         state.game.event(&mut state.ctx, &event);
         if state.ctx.exit {
@@ -675,8 +614,8 @@ impl<G: App> ApplicationHandler for Runner<G> {
 
     fn device_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
-        _id: winit::event::DeviceId,
+        event_loop: &dyn ActiveEventLoop,
+        _id: Option<winit::event::DeviceId>,
         event: DeviceEvent,
     ) {
         if let Some(state) = &mut self.state {
@@ -689,117 +628,46 @@ impl<G: App> ApplicationHandler for Runner<G> {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn text_input_request(
+        &mut self,
+        _event_loop: &dyn ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        session_id: TextInputSessionId,
+        request: TextInputRequest,
+    ) -> TextInputResponse {
+        let Some(state) = &mut self.state else {
+            return TextInputResponse::Unsupported;
+        };
+        state.game.text_input_request(&mut state.ctx, session_id, request)
+    }
+
+    fn back_requested(
+        &mut self,
+        _event_loop: &dyn ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+    ) -> BackResponse {
+        let Some(state) = &mut self.state else {
+            return BackResponse::SystemDefault;
+        };
+        if state.game.back_requested(&mut state.ctx) {
+            BackResponse::Handled
+        } else {
+            BackResponse::SystemDefault
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         event_loop.set_control_flow(ControlFlow::Wait);
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeTextInput(
-    mut env: EnvUnowned,
-    _: JClass,
-    id: jlong,
-    generation: jlong,
-    document_start: jlong,
-    text: JString,
-    selection_start: jint,
-    selection_end: jint,
-    composition_start: jint,
-    composition_end: jint,
-) {
-    env.with_env(|env| {
-        if id <= 0 || generation < 0 || document_start < 0 {
-            return Ok(());
-        }
-        let text = text.try_to_string(env)?;
-        if let Ok(mut guard) = NATIVE_RUNTIME.lock()
-            && let Some(runtime) = guard.as_mut()
-        {
-            let event = runtime.mirror.as_mut().and_then(|mirror| {
-                apply_native_snapshot(
-                    mirror,
-                    NativeTextSnapshot {
-                        id: id as u64,
-                        generation: generation as u64,
-                        document_start: document_start as usize,
-                        text,
-                        selection_start_utf16: selection_start,
-                        selection_end_utf16: selection_end,
-                        composition_start_utf16: composition_start,
-                        composition_end_utf16: composition_end,
-                    },
-                )
-            });
-            if let Some(event) = event {
-                runtime.events.push(NativeEvent::TextInput(event));
-                wake_native(runtime);
-            }
-        }
-        Ok::<_, jni::errors::Error>(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeTouchVelocity(
-    mut env: EnvUnowned,
-    _: JClass,
-    id: jlong,
-    x: jfloat,
-    y: jfloat,
-    minimum: jfloat,
-) {
-    env.with_env(|_| {
-        if id < 0 || !x.is_finite() || !y.is_finite() || !minimum.is_finite() {
-            return Ok(());
-        }
-        if let Ok(mut guard) = NATIVE_RUNTIME.lock()
-            && let Some(runtime) = guard.as_mut()
-        {
-            runtime.events.push(NativeEvent::TouchVelocity(TouchVelocity {
-                id: id as u64,
-                x,
-                y,
-                minimum: minimum.max(0.0),
-            }));
-            wake_native(runtime);
-        }
-        Ok::<_, jni::errors::Error>(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_xpjb_chad_ChadActivity_nativeViewport(
-    mut env: EnvUnowned,
-    _: JClass,
-    left: jint,
-    top: jint,
-    right: jint,
-    bottom: jint,
-    keyboard_visible: jboolean,
-) {
-    env.with_env(|_| {
-        let viewport = NativeViewport {
-            left,
-            top,
-            right,
-            bottom,
-            keyboard_visible,
-        };
-        if let Ok(mut pending) = PENDING_VIEWPORT.lock() {
-            *pending = Some(viewport);
-        }
-        if let Ok(mut guard) = NATIVE_RUNTIME.lock()
-            && let Some(runtime) = guard.as_mut()
-        {
-            if matches!(runtime.events.last(), Some(NativeEvent::Viewport(_))) {
-                runtime.events.pop();
-            }
-            runtime.events.push(NativeEvent::Viewport(viewport));
-            wake_native(runtime);
-        }
-        Ok::<_, jni::errors::Error>(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
+/// Export the JNI bridge consumed by `org.rustwindowing.winit.WinitActivity`.
+#[macro_export]
+macro_rules! android_activity_entry {
+    ($app:ty, $config:expr) => {
+        $crate::winit::platform::android::java_activity_entry!(
+            $crate::android::Runner<$app>,
+            $crate::android::Runner::<$app>::new($config)
+        );
+    };
 }

@@ -2,7 +2,7 @@
 
 A thin platform layer for games and apps on **winit + wgpu**. Not an engine.
 
-**Desktop · WebGPU · Android (NativeActivity + Vulkan)**
+**Desktop · WebGPU · Android (Java UI Looper + Vulkan)**
 
 > **Re-exports winit `0.30` + wgpu `30`** as `chad::winit` / `chad::wgpu` — write against those, don't add your own. See [Versioning](#versioning).
 
@@ -85,73 +85,38 @@ same rendering code. Regenerate every committed example preview with
 
 ## Android
 
-Android uses the separate, Android-only `chad::android` module. Its `run`, `Ctx`, `Config`, and `App` types own NativeActivity startup, Vulkan presentation, and suspend/resume. Desktop/web `run`, `Ctx`, and `ChadApp` keep their existing contract. Rendering code can share `RenderContext` across all three execution paths.
+This experimental branch uses the current-git `winit-android-support` fork and a regular Java
+`Activity`. Android's UI Looper owns dispatch; Rust receives bounded JNI callbacks instead of
+running a `NativeActivity` worker-thread event loop.
 
-Implement `android::App` and call `android::run` from an exported `android_main(AndroidApp)` in an Android `cdylib`. Chad selects winit's `android-native-activity` feature only on Android. APK packaging stays with the application; the stock NativeActivity path requires no Java/Kotlin code.
+Implement `chad::android::App` and export the bridge once from the Android `cdylib`:
 
-Custom-rendered text editors can instead package `android/java/io/github/xpjb/chad/ChadActivity.java` and name `io.github.xpjb.chad.ChadActivity` in the manifest. This optional API 30+ companion remains a NativeActivity while providing a transparent `EditText`, UTF-16 conversion, minimal UTF-8 splice events, composition/selection state, and stable keyboard-safe viewport updates that publish the final IME geometry once instead of asynchronously chasing each animation frame. Applications supply a bounded surrounding-text window through `Ctx::set_text_input` and receive `MobileEvent` through `android::App::mobile_event`; Chad never owns the application document. `Ctx::show_keyboard`, `hide_keyboard`, `show_text_menu`, `selection_haptic`, and `move_task_to_back` expose the standard Android controls while the application keeps focus and navigation policy. The Java source compiles directly with `javac` and `d8`, so this path does not require Gradle.
+```rust,ignore
+chad::android_activity_entry!(MyApp, chad::android::Config::default());
+```
 
-- `init` runs once after the first GPU and surface are ready. `resumed` follows init and each surface resume.
-- `suspended` runs after the surface has been dropped. The game, device, and GPU resources stay alive within that runner.
-- Updates and frames run only while a drawing surface exists. The callbacks run on the `android_main` thread, not Java's UI thread.
-- `elapsed` is wall time, including suspension. `dt` is the real update interval, reset on resume and focus changes. The application chooses its game-clock, input cancellation, and save policy.
-- Presentation defaults to `AutoVsync` with a one-frame latency hint. This runner has no desktop sleep/spin frame limiter. `Config.redraw` defaults to `RedrawMode::Continuous`; tools can use `OnDemand` to redraw only on window/device events or `ctx.window.request_redraw()` (also callable from another thread). Surface acquisition failures are retried.
-- Process death still needs application-owned durable saves. GPU device loss and a changed surface format require restarting this first implementation.
-- **Activity teardown is not process teardown.** Android can destroy and recreate an Activity without ending its process. See [upstream winit issues we're tracking](#upstream-winit-issues-were-tracking) before choosing an exit policy.
+Package the three Java sources under `android/java/org/rustwindowing/winit` and name
+`org.rustwindowing.winit.WinitActivity` in the manifest. The Java Activity owns lifecycle, a
+`SurfaceView`, Choreographer scheduling, Back dispatch, pointer history/timestamps, keyboard
+dispatch, insets, and a real `InputConnection`.
 
-The Android runner is now on **master**, after use in Android app/game builds and user-reported phone testing. It is no longer necessary to depend on the `android-runner` branch. Driver compatibility still depends on the device; the current runner requires Vulkan.
+Text input no longer uses a transparent `EditText`, a bounded Java mirror, per-edit generations, or
+per-frame surrounding-text copies. `Ctx::set_text_input` configures focus and IME options; Android
+then synchronously calls `App::text_input_request` to read or mutate the application's real document.
+Text-service coordinates are UTF-16 code units, matching Android and Ropey's UTF-16 conversion APIs.
+A session ID rejects obsolete `InputConnection` instances.
 
-Chad is a library, not an installable app. For packaging examples, see the [flow / 100 Android test app](https://github.com/xpjb/flow100/tree/android-app/android) and its build instructions (ARM64, Android 10+, development-signed APK). Building or sideloading a demo is entirely optional; desktop and Web consumers need no Android tooling.
+- `init` runs after the first Android Surface and GPU are ready.
+- `resumed` follows init and each surface recreation.
+- `suspended` runs after the WGPU surface is dropped and before Java releases its Surface.
+- Updates, rendering, input, and text callbacks are serialized on the Java UI thread. They must stay
+  short; persistence and other blocking work belong on background workers.
+- Window/platform operations are queued by Rust and applied only after the originating JNI callback
+  returns, preventing same-thread nested mutable reentry.
+- Presentation defaults to `AutoVsync` with a one-frame latency hint.
 
-### Upstream winit issues we're tracking
-
-Last checked **2026-09-14** against **0.30.13**, **0.31.0-beta.3**, and upstream
-master ([`475f5e2`](https://github.com/rust-windowing/winit/tree/475f5e236366bd2ea5697eea25d3f6c4fc16ad28)).
-The Back mapping remains unchanged and both lifecycle problems remain unfixed;
-upgrading to that beta/master is not a solution. These are not fixed by Chad's
-Android merge.
-
-1. **Android Back naming/documentation mismatch.** The 0.30 documentation labels
-   `NamedKey::GoBack` as Android `KEYCODE_BACK`, but the backend actually emits
-   `NamedKey::BrowserBack`. Following the documentation alone can therefore leave
-   an app's Back handler doing nothing. Related upstream issue:
-   [#2304 — Support Back button/KeyCode on Android](https://github.com/rust-windowing/winit/issues/2304).
-   That older, broader issue also discusses returning unhandled Back events to
-   Android; it is not a dedicated report of this exact naming mismatch.
-   **For now:** apps should recognize `BrowserBack | GoBack` (and Escape if
-   appropriate). Chad preserves raw events; the app decides what Back does.
-   **Waiting for:** clarification of the intended mapping and matching docs,
-   rather than silently changing an established mapping and breaking consumers.
-
-2. **Activity Destroy does not exit the event loop.** winit's Android backend
-   ignores `MainEvent::Destroy` instead of ending the loop. `android_main()` can
-   consequently fail to return, leaving native Activity teardown stuck. Ordinary
-   surface suspension/resumption is a different path and does not fix this.
-   Upstream: [#4303 — Destroy does not exit the event loop](https://github.com/rust-windowing/winit/issues/4303).
-   **Needed:** backend handling that ends the loop and permits cleanup/return
-   when the Activity is actually destroyed, not on every background/suspend.
-
-3. **A replacement Activity cannot create a new event loop in the same process.**
-   After an earlier loop exits, Android may call `android_main()` again with a
-   new Activity/`AndroidApp`, but winit's process-wide guard rejects the new loop
-   with `RecreationAttempt` ("EventLoop can't be recreated"). Fixing Destroy alone
-   exposes this second problem. Upstream:
-   [#3325 — RecreationAttempt on Activity reopen](https://github.com/rust-windowing/winit/issues/3325).
-   **Needed:** safe sequential loop recreation after the previous loop has fully
-   torn down. This is not a request to allow arbitrary concurrent loops/Activities.
-
-There is an [unmerged candidate patch for both lifecycle issues](https://github.com/rib/winit/commit/c28e425214e82bdb86dcdf89c9488554a18e24b2),
-linked from #4303. **Chad does not currently include that patch.** Any fix carried
-through Chad's Android dependency integration needs regression checks for
-background/resume, actual Activity destruction, and subsequent creation in the
-same process; it should not become bespoke teardown code in every app.
-
-For ordinary root-screen Back, an app can background its task (for example,
-`Activity.moveTaskToBack(true)`) and keep the existing loop resumable. This avoids
-that exit path; **it does not solve actual Activity destruction/recreation**.
-Process termination is not Chad's generic lifecycle policy. In particular, an
-app-owned process-exit workaround after `android::run` returns cannot fix an
-ignored Destroy event that prevents the runner from returning in the first place.
+This path is intentionally experimental. Native context menus, selection haptics, task-backgrounding,
+and full IME cursor geometry are still being wired.
 
 ## What you get
 

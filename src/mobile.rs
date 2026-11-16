@@ -93,7 +93,7 @@ pub enum MobileEvent {
     ViewportChanged(MobileViewport),
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct TextMirror {
     pub id: u64,
@@ -106,7 +106,7 @@ pub(crate) struct TextMirror {
     pub options: TextInputOptions,
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 pub(crate) struct NativeTextSnapshot {
     pub id: u64,
     pub generation: u64,
@@ -118,7 +118,7 @@ pub(crate) struct NativeTextSnapshot {
     pub composition_end_utf16: i32,
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 pub(crate) fn utf16_to_byte(text: &str, offset: i32) -> usize {
     let target = offset.max(0) as usize;
     let mut utf16 = 0;
@@ -132,7 +132,7 @@ pub(crate) fn utf16_to_byte(text: &str, offset: i32) -> usize {
     text.len()
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 pub(crate) fn byte_to_utf16(text: &str, byte: usize) -> Option<i32> {
     if byte > text.len() || !text.is_char_boundary(byte) {
         return None;
@@ -140,7 +140,7 @@ pub(crate) fn byte_to_utf16(text: &str, byte: usize) -> Option<i32> {
     i32::try_from(text[..byte].encode_utf16().count()).ok()
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 fn replacement(old: &str, new: &str) -> (Range<usize>, Range<usize>) {
     let old_bytes = old.as_bytes();
     let new_bytes = new.as_bytes();
@@ -172,7 +172,7 @@ fn replacement(old: &str, new: &str) -> (Range<usize>, Range<usize>) {
     (prefix..old.len() - suffix, prefix..new.len() - suffix)
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 pub(crate) fn apply_native_snapshot(
     mirror: &mut TextMirror,
     snapshot: NativeTextSnapshot,

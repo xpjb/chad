@@ -40,6 +40,7 @@ public class ChadActivity extends NativeActivity {
     private boolean updatingInput;
     private final android.graphics.Rect lastViewport = new android.graphics.Rect();
     private boolean lastKeyboardVisible;
+    private boolean imeAnimating;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -62,15 +63,31 @@ public class ChadActivity extends NativeActivity {
             reportViewport(insets);
             return insets;
         });
+        // onApply receives the end-state insets before an IME animation. Keep the native
+        // renderer on that stable viewport instead of asynchronously chasing every frame.
         decor.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
             WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+            @Override public void onPrepare(WindowInsetsAnimation animation) {
+                if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                    imeAnimating = true;
+                }
+            }
+
             @Override public WindowInsets onProgress(WindowInsets insets,
                 java.util.List<WindowInsetsAnimation> runningAnimations) {
-                reportViewport(insets);
                 return insets;
             }
+
+            @Override public void onEnd(WindowInsetsAnimation animation) {
+                if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                    imeAnimating = false;
+                    reportViewport();
+                }
+            }
         });
-        decor.getViewTreeObserver().addOnGlobalLayoutListener(this::reportViewport);
+        decor.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            if (!imeAnimating) reportViewport();
+        });
         decor.post(this::reportViewport);
     }
 

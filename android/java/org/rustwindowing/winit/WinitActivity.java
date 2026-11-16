@@ -32,6 +32,22 @@ public class WinitActivity extends Activity
     private int textPurpose;
 
     protected String nativeLibraryName() {
+        try {
+            android.content.pm.ActivityInfo info =
+                    getPackageManager()
+                            .getActivityInfo(
+                                    getComponentName(),
+                                    android.content.pm.PackageManager.GET_META_DATA);
+            String configured =
+                    info.metaData == null
+                            ? null
+                            : info.metaData.getString("android.app.lib_name");
+            if (configured != null && !configured.isEmpty()) {
+                return configured;
+            }
+        } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+            throw new IllegalStateException("cannot read Activity metadata", error);
+        }
         return "main";
     }
 

@@ -535,7 +535,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 [[package]]
 name = "dpi"
 version = "0.1.2"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 
 [[package]]
 name = "env_filter"
@@ -2795,12 +2795,12 @@ dependencies = [
 [[package]]
 name = "winit"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "bitflags 2.13.1",
  "cfg_aliases",
  "cursor-icon",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "libc",
  "raw-window-handle",
  "rustix 1.1.4",
@@ -2819,11 +2819,11 @@ dependencies = [
 [[package]]
 name = "winit-android"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "android-activity",
  "bitflags 2.13.1",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "jni",
  "ndk",
  "raw-window-handle",
@@ -2835,12 +2835,12 @@ dependencies = [
 [[package]]
 name = "winit-appkit"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "bitflags 2.13.1",
  "block2 0.6.2",
  "dispatch2",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
@@ -2857,10 +2857,10 @@ dependencies = [
 [[package]]
 name = "winit-common"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "block2 0.6.2",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
@@ -2873,11 +2873,11 @@ dependencies = [
 [[package]]
 name = "winit-core"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "keyboard-types",
  "raw-window-handle",
  "smol_str 0.3.2",
@@ -2887,10 +2887,10 @@ dependencies = [
 [[package]]
 name = "winit-orbital"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "bitflags 2.13.1",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "libredox",
  "orbclient 0.4.6",
  "raw-window-handle",
@@ -2903,12 +2903,12 @@ dependencies = [
 [[package]]
 name = "winit-uikit"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "bitflags 2.13.1",
  "block2 0.6.2",
  "dispatch2",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
@@ -2923,13 +2923,13 @@ dependencies = [
 [[package]]
 name = "winit-web"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "atomic-waker",
  "bitflags 2.13.1",
  "concurrent-queue",
  "cursor-icon",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "js-sys",
  "pin-project",
  "raw-window-handle",
@@ -2945,11 +2945,11 @@ dependencies = [
 [[package]]
 name = "winit-win32"
 version = "0.31.0-beta.4"
-source = "git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef#9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef"
+source = "git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4#ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
- "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef)",
+ "dpi 0.1.2 (git+https://github.com/xpjb/winit-android-support.git?rev=ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4)",
  "percent-encoding",
  "raw-window-handle",
  "smol_str 0.3.2",

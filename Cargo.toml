@@ -25,7 +25,7 @@ env_logger = "0.11"
 winit = "0.30"
 
 [target.'cfg(target_os = "android")'.dependencies]
-winit_android_support = { package = "winit", git = "https://github.com/xpjb/winit-android-support.git", rev = "9e782e6e2a515f3e85bc93ce3b17d42e77e1f5ef", default-features = false, features = ["android-java-activity"] }
+winit_android_support = { package = "winit", git = "https://github.com/xpjb/winit-android-support.git", rev = "ca92d9a5c8a3b2bebc68a9595b69c6000a0481f4", default-features = false, features = ["android-java-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

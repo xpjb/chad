@@ -13,7 +13,6 @@ import android.view.inputmethod.ExtractedTextRequest;
 /** InputConnection whose source of truth is the application text client in Rust. */
 final class WinitInputConnection extends BaseInputConnection {
     private final WinitActivity activity;
-    private final View view;
     private final long nativeHandle;
     private final long sessionId;
     private final boolean multiline;
@@ -29,7 +28,6 @@ final class WinitInputConnection extends BaseInputConnection {
             boolean multiline) {
         super(view, true);
         this.activity = activity;
-        this.view = view;
         this.nativeHandle = nativeHandle;
         this.sessionId = sessionId;
         this.multiline = multiline;
@@ -253,7 +251,10 @@ final class WinitInputConnection extends BaseInputConnection {
 
     @Override
     public boolean sendKeyEvent(KeyEvent event) {
-        return !closed && view.dispatchKeyEvent(event);
+        // Input methods may represent Backspace, Delete, Enter, and navigation as key events
+        // instead of direct InputConnection edits. Dispatch through the Activity so the event
+        // reaches Winit's native key bridge; dispatching only to the bare SurfaceView bypasses it.
+        return !closed && activity.dispatchKeyEvent(event);
     }
 
     @Override

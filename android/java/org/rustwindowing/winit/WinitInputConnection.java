@@ -1,5 +1,7 @@
 package org.rustwindowing.winit;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.view.KeyEvent;
@@ -11,13 +13,15 @@ import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
 
 /** InputConnection whose source of truth is the application text client in Rust. */
-final class WinitInputConnection extends BaseInputConnection {
+class WinitInputConnection extends BaseInputConnection {
     private final WinitActivity activity;
     private final long nativeHandle;
     private final long sessionId;
     private final boolean multiline;
+    private final boolean secure;
     private int batchDepth;
     private boolean closed;
+    private boolean selectionUpdatePending;
     private TextState cachedState;
 
     WinitInputConnection(
@@ -25,12 +29,14 @@ final class WinitInputConnection extends BaseInputConnection {
             View view,
             long nativeHandle,
             long sessionId,
-            boolean multiline) {
+            boolean multiline,
+            boolean secure) {
         super(view, true);
         this.activity = activity;
         this.nativeHandle = nativeHandle;
         this.sessionId = sessionId;
         this.multiline = multiline;
+        this.secure = secure;
     }
 
     @Override
@@ -231,6 +237,9 @@ final class WinitInputConnection extends BaseInputConnection {
         if (batchDepth > 0) {
             batchDepth--;
         }
+        if (batchDepth == 0 && selectionUpdatePending) {
+            publishSelection(cachedState);
+        }
         return !closed;
     }
 
@@ -241,7 +250,47 @@ final class WinitInputConnection extends BaseInputConnection {
 
     @Override
     public boolean commitCorrection(CorrectionInfo correctionInfo) {
-        return correctionInfo != null && commitText(correctionInfo.getNewText(), 1);
+        if (correctionInfo == null) {
+            return false;
+        }
+        CharSequence oldText = correctionInfo.getOldText();
+        return replaceTextRange(
+                correctionInfo.getOffset(),
+                correctionInfo.getOffset() + (oldText == null ? 0 : oldText.length()),
+                correctionInfo.getNewText(),
+                1);
+    }
+
+    @Override
+    public boolean performContextMenuAction(int action) {
+        TextState state = state();
+        if (state == null) {
+            return false;
+        }
+        int start = state.selectionStart();
+        int end = state.selectionEnd();
+        if (action == android.R.id.selectAll) {
+            return apply(-1, -1, null, 0, state.textLength, -1, -1);
+        }
+        if (action == android.R.id.copy || action == android.R.id.cut) {
+            if (secure || start == end) {
+                return false;
+            }
+            ClipboardManager clipboard = activity.getSystemService(ClipboardManager.class);
+            clipboard.setPrimaryClip(ClipData.newPlainText(null, read(start, end)));
+            return action != android.R.id.cut
+                    || apply(start, end, "", start, start, -1, -1);
+        }
+        if (action == android.R.id.paste || action == android.R.id.pasteAsPlainText) {
+            ClipboardManager clipboard = activity.getSystemService(ClipboardManager.class);
+            if (!clipboard.hasPrimaryClip() || clipboard.getPrimaryClip() == null
+                    || clipboard.getPrimaryClip().getItemCount() == 0) {
+                return false;
+            }
+            CharSequence value = clipboard.getPrimaryClip().getItemAt(0).coerceToText(activity);
+            return commitText(value == null ? "" : value, 1);
+        }
+        return false;
     }
 
     @Override
@@ -260,11 +309,31 @@ final class WinitInputConnection extends BaseInputConnection {
     @Override
     public void closeConnection() {
         closed = true;
+        selectionUpdatePending = false;
         cachedState = null;
+        activity.textConnectionClosed(this);
         super.closeConnection();
     }
 
-    private TextState state() {
+    final long sessionId() {
+        return sessionId;
+    }
+
+    final boolean isSecure() {
+        return secure;
+    }
+
+    final boolean hasSelection() {
+        TextState state = state();
+        return state != null && state.selectionStart() != state.selectionEnd();
+    }
+
+    final boolean hasText() {
+        TextState state = state();
+        return state != null && state.textLength > 0;
+    }
+
+    final TextState state() {
         if (closed || !activity.isTextSessionActive(sessionId)) {
             return null;
         }
@@ -279,7 +348,7 @@ final class WinitInputConnection extends BaseInputConnection {
         return state;
     }
 
-    private String read(int start, int end) {
+    final String read(int start, int end) {
         if (closed || end < start) {
             return "";
         }
@@ -288,7 +357,47 @@ final class WinitInputConnection extends BaseInputConnection {
         return text == null ? "" : text;
     }
 
-    private boolean apply(
+    final SurroundingSlice surroundingText(int beforeLength, int afterLength) {
+        TextState state = state();
+        if (state == null) {
+            return null;
+        }
+        int selectionStart = state.selectionStart();
+        int selectionEnd = state.selectionEnd();
+        int start = Math.max(0, selectionStart - Math.min(Math.max(0, beforeLength), 2048));
+        int end =
+                Math.min(
+                        state.textLength,
+                        selectionEnd + Math.min(Math.max(0, afterLength), 2048));
+        boolean compositionIncluded =
+                state.compositionStart >= start && state.compositionEnd <= end;
+        return new SurroundingSlice(
+                read(start, end),
+                start,
+                state.anchor - start,
+                state.focus - start,
+                compositionIncluded ? state.compositionStart - start : -1,
+                compositionIncluded ? state.compositionEnd - start : -1);
+    }
+
+    final boolean replaceTextRange(
+            int requestedStart,
+            int requestedEnd,
+            CharSequence text,
+            int newCursorPosition) {
+        TextState state = state();
+        if (state == null) {
+            return false;
+        }
+        int start = clamp(Math.min(requestedStart, requestedEnd), 0, state.textLength);
+        int end = clamp(Math.max(requestedStart, requestedEnd), 0, state.textLength);
+        String replacement = text == null ? "" : text.toString();
+        int newLength = state.textLength - (end - start) + replacement.length();
+        int cursor = cursorAfterReplacement(start, replacement.length(), newCursorPosition, newLength);
+        return apply(start, end, replacement, cursor, cursor, -1, -1);
+    }
+
+    final boolean apply(
             int replacementStart,
             int replacementEnd,
             String replacement,
@@ -319,7 +428,24 @@ final class WinitInputConnection extends BaseInputConnection {
             return false;
         }
         cachedState = state;
+        selectionUpdatePending = true;
+        if (batchDepth == 0) {
+            publishSelection(state);
+        }
         return wire[0] == 1;
+    }
+
+    private void publishSelection(TextState state) {
+        if (state == null || closed) {
+            return;
+        }
+        selectionUpdatePending = false;
+        activity.updateTextSelection(
+                sessionId,
+                state.anchor,
+                state.focus,
+                state.compositionStart,
+                state.compositionEnd);
     }
 
     private static int cursorAfterReplacement(
@@ -337,7 +463,31 @@ final class WinitInputConnection extends BaseInputConnection {
         return Math.max(minimum, Math.min(maximum, value));
     }
 
-    private static final class TextState {
+    static final class SurroundingSlice {
+        final String text;
+        final int offset;
+        final int selectionAnchor;
+        final int selectionFocus;
+        final int compositionStart;
+        final int compositionEnd;
+
+        SurroundingSlice(
+                String text,
+                int offset,
+                int selectionAnchor,
+                int selectionFocus,
+                int compositionStart,
+                int compositionEnd) {
+            this.text = text;
+            this.offset = offset;
+            this.selectionAnchor = selectionAnchor;
+            this.selectionFocus = selectionFocus;
+            this.compositionStart = compositionStart;
+            this.compositionEnd = compositionEnd;
+        }
+    }
+
+    static final class TextState {
         final int textLength;
         final int anchor;
         final int focus;

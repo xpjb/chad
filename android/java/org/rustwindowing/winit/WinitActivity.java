@@ -1,18 +1,29 @@
 package org.rustwindowing.winit;
 
 import android.app.Activity;
+import android.content.ClipboardManager;
+import android.graphics.Insets;
+import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
+import android.view.ActionMode;
 import android.view.Choreographer;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
-import android.text.InputType;
-import android.view.WindowInsets;
+import java.util.List;
 
 /**
  * Experimental Winit Activity whose Java UI Looper owns application dispatch.
@@ -30,6 +41,8 @@ public class WinitActivity extends Activity
     private long activeTextSession;
     private int textHint;
     private int textPurpose;
+    private ActionMode inputMenu;
+    private long inputMenuSession = -1;
 
     protected String nativeLibraryName() {
         try {
@@ -56,6 +69,10 @@ public class WinitActivity extends Activity
         super.onCreate(state);
         System.loadLibrary(nativeLibraryName());
 
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+        }
         surfaceView = new WinitSurfaceView(this);
         surfaceView.setFocusable(true);
         surfaceView.setFocusableInTouchMode(true);
@@ -88,6 +105,7 @@ public class WinitActivity extends Activity
 
     @Override
     protected void onDestroy() {
+        finishTextMenu();
         if (nativeHandle != 0) {
             surfaceView.getHolder().removeCallback(this);
             Choreographer.getInstance().removeFrameCallback(this);
@@ -117,6 +135,7 @@ public class WinitActivity extends Activity
                 surfaceView.getWidth(),
                 surfaceView.getHeight(),
                 getResources().getDisplayMetrics().density);
+        surfaceView.requestApplyInsets();
         afterNativeCall();
     }
 
@@ -200,17 +219,23 @@ public class WinitActivity extends Activity
     }
 
     private void applyImeCommand(long[] command) {
-        if (command.length < 4) {
+        if (command.length < 8) {
             throw new IllegalStateException("invalid IME command from Rust");
         }
         int kind = (int) command[0];
         long sessionId = command[1];
         InputMethodManager manager = getSystemService(InputMethodManager.class);
         if (kind == 1) {
+            finishTextMenu();
             activeTextSession = sessionId;
             textHint = (int) command[2];
             textPurpose = (int) command[3];
             surfaceView.configureTextInput(activeTextSession, textHint, textPurpose);
+            surfaceView.setCaretRect(
+                    safeInt(command[4]),
+                    safeInt(command[5]),
+                    safeInt(command[6]),
+                    safeInt(command[7]));
             surfaceView.requestFocus();
             manager.restartInput(surfaceView);
             surfaceView.post(() -> manager.showSoftInput(surfaceView, InputMethodManager.SHOW_IMPLICIT));
@@ -219,6 +244,11 @@ public class WinitActivity extends Activity
             textHint = (int) command[2];
             textPurpose = (int) command[3];
             surfaceView.configureTextInput(activeTextSession, textHint, textPurpose);
+            surfaceView.setCaretRect(
+                    safeInt(command[4]),
+                    safeInt(command[5]),
+                    safeInt(command[6]),
+                    safeInt(command[7]));
             if (oldInputType != surfaceView.currentInputType()) {
                 manager.restartInput(surfaceView);
             } else {
@@ -226,18 +256,148 @@ public class WinitActivity extends Activity
                 if (state.length >= 6) {
                     manager.updateSelection(
                             surfaceView,
-                            (int) state[2],
-                            (int) state[3],
-                            (int) state[4],
-                            (int) state[5]);
+                            safeInt(state[2]),
+                            safeInt(state[3]),
+                            safeInt(state[4]),
+                            safeInt(state[5]));
                 }
             }
+            if (inputMenu != null) {
+                inputMenu.invalidateContentRect();
+            }
         } else if (kind == 3 && activeTextSession == sessionId) {
+            finishTextMenu();
             manager.hideSoftInputFromWindow(surfaceView.getWindowToken(), 0);
             activeTextSession = 0;
             surfaceView.configureTextInput(0, 0, 0);
             manager.restartInput(surfaceView);
+        } else if (kind == 4 && activeTextSession == sessionId) {
+            showTextMenu(sessionId);
+        } else if (kind == 5) {
+            surfaceView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        } else if (kind == 6) {
+            moveTaskToBack(true);
         }
+    }
+
+    void updateTextSelection(
+            long sessionId,
+            int anchor,
+            int focus,
+            int compositionStart,
+            int compositionEnd) {
+        if (nativeHandle == 0 || activeTextSession != sessionId) {
+            return;
+        }
+        getSystemService(InputMethodManager.class)
+                .updateSelection(surfaceView, anchor, focus, compositionStart, compositionEnd);
+        if (inputMenu != null && inputMenuSession == sessionId) {
+            inputMenu.invalidate();
+            inputMenu.invalidateContentRect();
+        }
+    }
+
+    void textConnectionClosed(WinitInputConnection connection) {
+        surfaceView.clearInputConnection(connection);
+        if (inputMenuSession == connection.sessionId()) {
+            finishTextMenu();
+        }
+    }
+
+    private void showTextMenu(long sessionId) {
+        WinitInputConnection connection = surfaceView.inputConnection(sessionId);
+        if (connection == null) {
+            return;
+        }
+        finishTextMenu();
+        inputMenuSession = sessionId;
+        inputMenu =
+                surfaceView.startActionMode(
+                        new ActionMode.Callback2() {
+                            @Override
+                            public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                                populateTextMenu(menu, connection);
+                                return menu.size() > 0;
+                            }
+
+                            @Override
+                            public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+                                menu.clear();
+                                populateTextMenu(menu, connection);
+                                return true;
+                            }
+
+                            @Override
+                            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                                boolean handled =
+                                        connection.performContextMenuAction(item.getItemId());
+                                if (!handled) {
+                                    return false;
+                                }
+                                if (item.getItemId() == android.R.id.selectAll) {
+                                    mode.invalidate();
+                                    mode.invalidateContentRect();
+                                } else {
+                                    mode.finish();
+                                }
+                                return true;
+                            }
+
+                            @Override
+                            public void onDestroyActionMode(ActionMode mode) {
+                                if (inputMenu == mode) {
+                                    inputMenu = null;
+                                    inputMenuSession = -1;
+                                }
+                            }
+
+                            @Override
+                            public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
+                                surfaceView.copyCaretRect(outRect);
+                            }
+                        },
+                        ActionMode.TYPE_FLOATING);
+        if (inputMenu == null) {
+            inputMenuSession = -1;
+        }
+    }
+
+    private void populateTextMenu(Menu menu, WinitInputConnection connection) {
+        boolean selected = connection.hasSelection();
+        if (selected && !connection.isSecure()) {
+            addTextMenuItem(menu, android.R.id.cut, android.R.string.cut);
+            addTextMenuItem(menu, android.R.id.copy, android.R.string.copy);
+        }
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        if (clipboard.hasPrimaryClip()) {
+            addTextMenuItem(menu, android.R.id.paste, android.R.string.paste);
+        }
+        if (connection.hasText()) {
+            addTextMenuItem(menu, android.R.id.selectAll, android.R.string.selectAll);
+        }
+    }
+
+    private static void addTextMenuItem(Menu menu, int id, int title) {
+        menu.add(Menu.NONE, id, Menu.NONE, title).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+    }
+
+    private void finishTextMenu() {
+        ActionMode menu = inputMenu;
+        inputMenu = null;
+        inputMenuSession = -1;
+        if (menu != null) {
+            menu.finish();
+        }
+    }
+
+    private static int safeInt(long value) {
+        if (value < Integer.MIN_VALUE) {
+            return Integer.MIN_VALUE;
+        }
+        if (value > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) value;
     }
 
     private void scheduleFrame() {
@@ -251,27 +411,53 @@ public class WinitActivity extends Activity
     private void installInsetsListener() {
         surfaceView.setOnApplyWindowInsetsListener(
                 (view, insets) -> {
-                    if (nativeHandle != 0) {
-                        if (Build.VERSION.SDK_INT >= 30) {
-                            android.graphics.Insets bars =
-                                    insets.getInsets(
-                                            WindowInsets.Type.systemBars()
-                                                    | WindowInsets.Type.displayCutout());
-                            WinitNative.nativeInsets(
-                                    nativeHandle, bars.left, bars.top, bars.right, bars.bottom);
-                        } else {
-                            WinitNative.nativeInsets(
-                                    nativeHandle,
-                                    insets.getSystemWindowInsetLeft(),
-                                    insets.getSystemWindowInsetTop(),
-                                    insets.getSystemWindowInsetRight(),
-                                    insets.getSystemWindowInsetBottom());
-                        }
-                        afterNativeCall();
-                    }
+                    reportWindowInsets(insets);
                     return insets;
                 });
+        if (Build.VERSION.SDK_INT >= 30) {
+            surfaceView.setWindowInsetsAnimationCallback(
+                    new WindowInsetsAnimation.Callback(
+                            WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                        @Override
+                        public WindowInsets onProgress(
+                                WindowInsets insets,
+                                List<WindowInsetsAnimation> runningAnimations) {
+                            reportWindowInsets(insets);
+                            return insets;
+                        }
+                    });
+        }
         surfaceView.requestApplyInsets();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void reportWindowInsets(WindowInsets insets) {
+        if (nativeHandle == 0 || insets == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            Insets bars =
+                    insets.getInsets(
+                            WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsets.Type.ime());
+            Insets safe = Insets.max(bars, ime);
+            WinitNative.nativeInsets(
+                    nativeHandle,
+                    safe.left,
+                    safe.top,
+                    safe.right,
+                    safe.bottom,
+                    insets.isVisible(WindowInsets.Type.ime()));
+        } else {
+            WinitNative.nativeInsets(
+                    nativeHandle,
+                    insets.getSystemWindowInsetLeft(),
+                    insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(),
+                    insets.getSystemWindowInsetBottom(),
+                    false);
+        }
+        afterNativeCall();
     }
 
     @Override
@@ -310,13 +496,15 @@ public class WinitActivity extends Activity
         super.onBackPressed();
     }
 
-    private static final class WinitSurfaceView extends SurfaceView {
+    static final class WinitSurfaceView extends SurfaceView {
         private final WinitActivity activity;
         private long nativeHandle;
         private long textSession;
         private int textHint;
         private int textPurpose;
         private int inputType = InputType.TYPE_CLASS_TEXT;
+        private final Rect caretRect = new Rect(0, 0, 1, 1);
+        private WinitInputConnection inputConnection;
 
         WinitSurfaceView(WinitActivity activity) {
             super(activity);
@@ -336,6 +524,38 @@ public class WinitActivity extends Activity
 
         int currentInputType() {
             return inputType;
+        }
+
+        void setCaretRect(int left, int top, int right, int bottom) {
+            caretRect.set(left, top, Math.max(left + 1, right), Math.max(top + 1, bottom));
+        }
+
+        void copyCaretRect(Rect destination) {
+            destination.set(caretRect);
+            int width = Math.max(1, getWidth());
+            int height = Math.max(1, getHeight());
+            if (destination.right < 0) {
+                destination.offset(-destination.right, 0);
+            } else if (destination.left > width) {
+                destination.offset(width - destination.left, 0);
+            }
+            if (destination.bottom < 0) {
+                destination.offset(0, -destination.bottom);
+            } else if (destination.top > height) {
+                destination.offset(0, height - destination.top);
+            }
+        }
+
+        WinitInputConnection inputConnection(long sessionId) {
+            return inputConnection != null && inputConnection.sessionId() == sessionId
+                    ? inputConnection
+                    : null;
+        }
+
+        void clearInputConnection(WinitInputConnection connection) {
+            if (inputConnection == connection) {
+                inputConnection = null;
+            }
         }
 
         @Override
@@ -359,12 +579,46 @@ public class WinitActivity extends Activity
                 outAttrs.initialSelStart = (int) state[2];
                 outAttrs.initialSelEnd = (int) state[3];
             }
-            return new WinitInputConnection(
-                    activity,
-                    this,
-                    nativeHandle,
-                    textSession,
-                    (inputType & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0);
+            boolean multiline = (inputType & InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0;
+            boolean secure = textPurpose == 1 || textPurpose == 7;
+            if (Build.VERSION.SDK_INT >= 34) {
+                inputConnection =
+                        new WinitInputConnectionApi34(
+                                activity,
+                                this,
+                                nativeHandle,
+                                textSession,
+                                multiline,
+                                secure);
+            } else if (Build.VERSION.SDK_INT >= 33) {
+                inputConnection =
+                        new WinitInputConnectionApi33(
+                                activity,
+                                this,
+                                nativeHandle,
+                                textSession,
+                                multiline,
+                                secure);
+            } else if (Build.VERSION.SDK_INT >= 31) {
+                inputConnection =
+                        new WinitInputConnectionApi31(
+                                activity,
+                                this,
+                                nativeHandle,
+                                textSession,
+                                multiline,
+                                secure);
+            } else {
+                inputConnection =
+                        new WinitInputConnection(
+                                activity,
+                                this,
+                                nativeHandle,
+                                textSession,
+                                multiline,
+                                secure);
+            }
+            return inputConnection;
         }
 
         @Override

@@ -168,15 +168,21 @@ impl Ctx {
     }
 
     pub fn move_task_to_back(&mut self) -> Result<(), String> {
-        Err("move_task_to_back is not implemented by the Java-loop experiment".into())
+        self.window.as_ref().move_task_to_back();
+        Ok(())
     }
 
     pub fn show_text_menu(&self) -> Result<(), String> {
-        Err("native Android text menus are not implemented by the Java-loop experiment".into())
+        self.window
+            .as_ref()
+            .show_text_menu()
+            .then_some(())
+            .ok_or_else(|| "no active Android text session for the text menu".into())
     }
 
     pub fn selection_haptic(&self) -> Result<(), String> {
-        Err("Android selection haptics are not implemented by the Java-loop experiment".into())
+        self.window.as_ref().selection_haptic();
+        Ok(())
     }
 
     /// Finish the Activity after the current callback returns.
@@ -370,7 +376,7 @@ impl<G: App> State<G> {
                     .1
                     .saturating_sub(insets.top.saturating_add(insets.bottom)) as f32,
             ),
-            keyboard_visible: false,
+            keyboard_visible: self.ctx.window.as_ref().keyboard_visible(),
         };
         if viewport != self.ctx.mobile_viewport {
             self.ctx.mobile_viewport = viewport;

@@ -22,7 +22,8 @@ final class WinitNative {
             long handle, int width, int height, double scaleFactor);
     static native void nativeSurfaceDestroyed(long handle);
     static native void nativeFocus(long handle, boolean focused);
-    static native void nativeInsets(long handle, int left, int top, int right, int bottom);
+    static native void nativeInsets(
+            long handle, int left, int top, int right, int bottom, boolean keyboardVisible);
     static native boolean nativePointer(
             long handle,
             int action,

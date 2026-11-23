@@ -38,17 +38,14 @@ pub struct TextInputOptions {
     pub secure: bool,
 }
 
-/// The application supplies one bounded text window around the active selection.
-/// Text and selection use global UTF-8 document byte offsets.
-pub struct TextInputState<'a> {
+/// Configuration for a focused Android text session. The text client supplies the document.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextInputState {
+    /// Keep the same ID while editing the same field or document.
     pub id: u64,
-    /// Increment after every application-owned text or selection change, and when
-    /// replacing or recentering the native mirror. Native edits keep this value.
-    pub generation: u64,
-    pub document_start: usize,
-    pub text: &'a str,
-    pub selection: Selection,
-    pub field_rect: PhysicalRect,
+    /// Increment after app-owned text, selection, or composition changes so Android re-reads them.
+    /// Edits made through the input connection report their new selection directly.
+    pub revision: u64,
     pub caret_rect: PhysicalRect,
     pub options: TextInputOptions,
 }

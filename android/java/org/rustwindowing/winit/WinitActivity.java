@@ -238,7 +238,6 @@ public class WinitActivity extends Activity
                     safeInt(command[7]));
             surfaceView.requestFocus();
             manager.restartInput(surfaceView);
-            surfaceView.post(() -> manager.showSoftInput(surfaceView, InputMethodManager.SHOW_IMPLICIT));
         } else if (kind == 2 && activeTextSession == sessionId) {
             int oldInputType = surfaceView.currentInputType();
             textHint = (int) command[2];
@@ -277,6 +276,12 @@ public class WinitActivity extends Activity
             surfaceView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
         } else if (kind == 6) {
             moveTaskToBack(true);
+        } else if (kind == 7 && activeTextSession == sessionId) {
+            if (command[2] != 0) {
+                manager.showSoftInput(surfaceView, InputMethodManager.SHOW_IMPLICIT);
+            } else {
+                manager.hideSoftInputFromWindow(surfaceView.getWindowToken(), 0);
+            }
         }
     }
 

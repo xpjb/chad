@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{
-    MobileEvent, MobileViewport, PhysicalRect, RenderContext, TextInputOptions, TextInputState,
+    MobileEvent, MobileViewport, PhysicalRect, RenderContext, TextInputState,
     wgpu, winit,
 };
 use winit::application::{ApplicationHandler, BackResponse};
@@ -50,15 +50,6 @@ impl Default for Config {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ActiveTextInput {
-    id: u64,
-    options: TextInputOptions,
-    field_rect: PhysicalRect,
-    caret_rect: PhysicalRect,
-    enabled: bool,
-}
-
 /// GPU and input context. The Android Activity owns the event loop and surface lifecycle.
 pub struct Ctx {
     pub window: Arc<dyn Window>,
@@ -72,7 +63,7 @@ pub struct Ctx {
     pub frame_index: u64,
     pub focused: bool,
     mobile_viewport: MobileViewport,
-    text_input: Option<ActiveTextInput>,
+    text_input: Option<TextInputState>,
     size: (u32, u32),
     exit: bool,
 }
@@ -95,76 +86,75 @@ impl Ctx {
         self.window.request_redraw();
     }
 
-    /// Configures the focused text session. The supplied text window is no longer mirrored into
-    /// Java; synchronous [`App::text_input_request`] callbacks are the document source of truth.
-    /// `generation`, `document_start`, `text`, and `selection` remain in this transitional
-    /// signature only so applications can migrate without changing focus plumbing first.
-    pub fn set_text_input(&mut self, state: TextInputState<'_>) -> Result<(), String> {
+    /// Configures the focused text session without changing keyboard visibility.
+    /// Android reads and edits the document through synchronous [`App::text_input_request`] calls.
+    pub fn set_text_input(&mut self, state: TextInputState) -> Result<(), String> {
         if state.id == 0 {
             return Err("text input ID must be nonzero".into());
         }
-        let next = ActiveTextInput {
-            id: state.id,
-            options: state.options,
-            field_rect: state.field_rect,
-            caret_rect: state.caret_rect,
-            enabled: true,
-        };
-        let previous = self.text_input;
-        if previous.map(|input| input.id) != Some(state.id) {
-            if previous.is_some_and(|input| input.enabled) {
-                self.window
-                    .request_ime_update(ImeRequest::Disable)
-                    .map_err(|error| format!("disable previous Android text input: {error}"))?;
-            }
+        if self.text_input == Some(state) {
+            return Ok(());
+        }
+        if self.text_input.map(|input| input.id) != Some(state.id) {
             self.window
                 .as_ref()
                 .set_text_input_session(TextInputSessionId::from_raw(state.id));
-            self.enable_text_input(next)?;
-        } else if previous != Some(next) {
-            self.update_text_input(next)?;
         }
-        self.text_input = Some(next);
+        let mut hint = ImeHint::COMPLETION | ImeHint::SPELLCHECK;
+        let purpose = if state.options.secure {
+            hint |= ImeHint::HIDDEN_TEXT | ImeHint::SENSITIVE_DATA;
+            ImePurpose::Password
+        } else {
+            ImePurpose::Normal
+        };
+        if state.options.multiline {
+            hint |= ImeHint::MULTILINE;
+        }
+        let caret = state.caret_rect;
+        let data = ImeRequestData::default()
+            .with_hint_and_purpose(hint, purpose)
+            .with_cursor_area(
+                winit::dpi::PhysicalPosition::new(caret.x, caret.y).into(),
+                winit::dpi::PhysicalSize::new(caret.width.max(1.0), caret.height.max(1.0)).into(),
+            );
+        let request = if self.text_input.is_some() {
+            ImeRequest::Update(data)
+        } else {
+            let capabilities = ImeCapabilities::new()
+                .with_hint_and_purpose()
+                .with_cursor_area();
+            ImeRequest::Enable(
+                ImeEnableRequest::new(capabilities, data)
+                    .ok_or("invalid Android IME enable request")?,
+            )
+        };
+        self.window
+            .request_ime_update(request)
+            .map_err(|error| format!("configure Android text input: {error}"))?;
+        self.text_input = Some(state);
         Ok(())
     }
 
     pub fn clear_text_input(&mut self) -> Result<(), String> {
-        if self.text_input.is_some_and(|input| input.enabled) {
+        if self.text_input.is_some() {
             self.window
                 .request_ime_update(ImeRequest::Disable)
                 .map_err(|error| format!("disable Android text input: {error}"))?;
-        }
-        self.text_input = None;
-        Ok(())
-    }
-
-    pub fn show_keyboard(&mut self) -> Result<(), String> {
-        let Some(mut input) = self.text_input else {
-            return Err("no Android text input session is configured".into());
-        };
-        if !input.enabled {
-            input.enabled = true;
-            self.window
-                .as_ref()
-                .set_text_input_session(TextInputSessionId::from_raw(input.id));
-            self.enable_text_input(input)?;
-            self.text_input = Some(input);
+            self.text_input = None;
         }
         Ok(())
     }
 
-    pub fn hide_keyboard(&mut self) -> Result<(), String> {
-        let Some(mut input) = self.text_input else {
-            return Ok(());
-        };
-        if input.enabled {
-            self.window
-                .request_ime_update(ImeRequest::Disable)
-                .map_err(|error| format!("hide Android keyboard: {error}"))?;
-            input.enabled = false;
-            self.text_input = Some(input);
-        }
-        Ok(())
+    pub fn show_keyboard(&self) -> Result<(), String> {
+        self.window
+            .as_ref()
+            .set_keyboard_visible(true)
+            .then_some(())
+            .ok_or_else(|| "no Android text input session is configured".into())
+    }
+
+    pub fn hide_keyboard(&self) {
+        self.window.as_ref().set_keyboard_visible(false);
     }
 
     pub fn move_task_to_back(&mut self) -> Result<(), String> {
@@ -189,50 +179,6 @@ impl Ctx {
     pub fn exit(&mut self) {
         self.exit = true;
     }
-
-    fn enable_text_input(&self, input: ActiveTextInput) -> Result<(), String> {
-        let capabilities = ImeCapabilities::new()
-            .with_hint_and_purpose()
-            .with_cursor_area();
-        let data = ime_data(input);
-        let request = ImeEnableRequest::new(capabilities, data)
-            .ok_or("invalid Android IME enable request")?;
-        self.window
-            .request_ime_update(ImeRequest::Enable(request))
-            .map_err(|error| format!("enable Android text input: {error}"))
-    }
-
-    fn update_text_input(&self, input: ActiveTextInput) -> Result<(), String> {
-        if !input.enabled {
-            return Ok(());
-        }
-        self.window
-            .request_ime_update(ImeRequest::Update(ime_data(input)))
-            .map_err(|error| format!("update Android text input: {error}"))
-    }
-}
-
-fn ime_data(input: ActiveTextInput) -> ImeRequestData {
-    let mut hint = ImeHint::COMPLETION | ImeHint::SPELLCHECK;
-    let purpose = if input.options.secure {
-        hint |= ImeHint::HIDDEN_TEXT | ImeHint::SENSITIVE_DATA;
-        ImePurpose::Password
-    } else {
-        ImePurpose::Normal
-    };
-    if input.options.multiline {
-        hint |= ImeHint::MULTILINE;
-    }
-    ImeRequestData::default()
-        .with_hint_and_purpose(hint, purpose)
-        .with_cursor_area(
-            winit::dpi::PhysicalPosition::new(input.caret_rect.x, input.caret_rect.y).into(),
-            winit::dpi::PhysicalSize::new(
-                input.caret_rect.width.max(1.0),
-                input.caret_rect.height.max(1.0),
-            )
-            .into(),
-        )
 }
 
 impl RenderContext for Ctx {
